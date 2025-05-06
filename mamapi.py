@@ -20,6 +20,8 @@ stderr_handler.setFormatter(formatter)
 logger.addHandler(stdout_handler)
 logger.addHandler(stderr_handler)
 
+logNextSuccessfullIpCheck = False
+
 current_ip = ""
 mam_id = ""
 
@@ -63,22 +65,34 @@ def saveData():
         json.dump(json_serializable_data, f, indent=4)
 
 def returnIP():
+    global logNextSuccessfullIpCheck
     logger.debug("Attempting to grab external IP...")
+
     try:
         r = requests.get("https://api.ipify.org")
     except requests.exceptions.ConnectionError:
         logger.error(f"Failed to grab external IP - no internet")
+        logNextSuccessfullIpCheck = True
         return False
     except requests.exceptions.Timeout:
         logger.error(f"Request to external IP tracker timed out")
+        logNextSuccessfullIpCheck = True
         return False
     except requests.exceptions.RequestException as err:
         logger.error(f"Unexpected error during HTTP GET: {err}")
+        logNextSuccessfullIpCheck = True
         return False
+
     if r.status_code == 200:
-        logger.debug(f"Fetched external IP: {r.text}")
+        if (logNextSuccessfullIpCheck):
+            logger.info(f"Fetched external IP: {r.text}")
+        else:
+            logger.debug(f"Fetched external IP: {r.text}")
+
+        logNextSuccessfullIpCheck = False
         return r.text
     else:
+        logNextSuccessfullIpCheck = True
         return False
 
 def chooseMAM_ID():
@@ -170,9 +184,9 @@ try:
     logger.info("https://github.com/elforkhead/mamapi")
     if os.getenv("DEBUG"):
         logger.setLevel(logging.DEBUG)
-        logger.info("Logger level: DEBUG (enabled by DEBUG env var)") 
+        logger.info("Logger level: DEBUG (enabled by DEBUG env var)")
     else:
-        logger.info("Logger level: INFO (default)") 
+        logger.info("Logger level: INFO (default)")
         logger.info("Routine IP checks are not logged")
         logger.info("Log may appear empty if there are no IP changes")
     logger.info("Checking for IP changes every 5 minutes")
@@ -208,6 +222,7 @@ try:
             r = contactMAM(mam_id)
             processResponse(r)
             continue
+
 except Exception as e:
     logger.critical(f"Caught exception: {e}")
     logger.critical("The script will now exit")
