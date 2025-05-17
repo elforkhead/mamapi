@@ -21,6 +21,50 @@ stderr_handler.setFormatter(formatter)
 logger.addHandler(stdout_handler)
 logger.addHandler(stderr_handler)
 
+class Client:
+    pass
+
+class Session:
+    def __init__(self):
+        self.mam_id = ""
+        self._ASN = None
+        self.last_update_time = ""
+        self.last_update_ip = ""
+        self.invalid = False
+        self.original_session_ip = ""
+        
+    @property
+    def ASN(self):
+        ip = None
+        if self._ASN != None:
+            return self._ASN
+        if self.last_update_ip:
+            ip = self.last_update_ip
+        elif self.original_session_ip:
+            ip = self.original_session_ip
+        if ip:
+            output = lookup_asn(ip)
+            if output:
+                self._ASN = output
+                return output
+        
+    @ASN.setter
+    def ASN(self, value):
+        self._ASN = value
+
+def lookup_asn(ip):
+    url = f"https://api.hackertarget.com/aslookup/?q={ip}&output=json"
+    try:
+        response = requests.get(url, timeout=5)
+        response.raise_for_status()
+        data = response.json()
+        logger.debug
+        return data.get("asn", "")
+    except requests.RequestException as e:
+        logger.error(f"Error fetching ASN: {e}") # will need more elaborate error processing for poorly formatted ips and such
+        return False
+
+
 current_ip = ""
 mam_id = ""
 first_run = True
@@ -249,13 +293,13 @@ try:
             minutes_remaining = math.ceil(max(deltaTo60.total_seconds() / 60, 0))
             logger.info(f"Current IP ({current_ip}) is different than previous update ({json_data['last_updated_ip']}), but we are currently rate limited.")
             logger.debug(f"rateLimited function returned positive: time delta calculated as {minutes_remaining} minutes")
-            logger.info(f"Last successful IP update was at {json_data["last_successful_update"].astimezone().strftime('%Y-%m-%d %H:%M')}. Sleeping for {minutes_remaining} minutes until an hour has passed")
+            logger.info(f"Last successful IP update was at {json_data['last_successful_update'].astimezone().strftime('%Y-%m-%d %H:%M')}. Sleeping for {minutes_remaining} minutes until an hour has passed")
             first_run = False
             time.sleep((minutes_remaining * 60) + 2)
         else:
             first_run = False
             if json_data["last_updated_ip"]:
-                logger.info(f"Detected IP change. Old IP: '{json_data["last_updated_ip"]}' New IP: '{current_ip}'")
+                logger.info(f"Detected IP change. Old IP: '{json_data['last_updated_ip']}' New IP: '{current_ip}'")
             else:
                 logger.info("No recorded session IP - attempting to update session")
             r = contactMAM(mam_id)
