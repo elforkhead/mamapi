@@ -21,90 +21,356 @@ stderr_handler.setFormatter(formatter)
 logger.addHandler(stdout_handler)
 logger.addHandler(stderr_handler)
 
-current_ip = ""
-mam_id = ""
-first_run = True
+class SessionInvalidError(Exception):
+    """Exception raised when mam session is declared invalid"""
+    def __init__(self, reason):
+        self.reason = reason
+        super().__init__(f"MAM session invalidated: {self.reason}")
 
-internet_is_out = False
+class StateSingleton:
+    _instance = None
 
-json_path = Path('/data/mamapi.json')
-json_data = {}
-blankTemplate = {"last_successful_update": 0, "last_updated_ip": "", "last_mam_id": "", "last_mam_id_invalid": False}
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
 
-def timeNow():
-    return datetime.now(timezone.utc)
+    def __init__(self):
+        # Avoid reinitialization if already constructed
+        if not hasattr(self, "_initialized"):
+            self.last_update_ip = None
+            self.last_update_asn = None
+            self.last_update_mamid = None
+            self.last_update_time = None
+            self.ip = None
+            self.asn = None
+            self.no_current_options = False
+            self.dumb_mode = False
+            self.first_run = True
+            self._initialized = True
 
-def rateLimited(timestamp):
-    if not timestamp:
-        logger.debug(f"Returned False for ratelimited as provided empty parameter")
+    def to_dict(self):
+            return {
+                "last_update_ip": self.last_update_ip,
+                "last_update_asn": self.last_update_asn,
+                "last_update_mamid": self.last_update_mamid,
+                "last_update_time": self.last_update_time
+            }
+
+    def load(self, data: dict):
+        self.last_update_ip = data.get("last_update_ip")
+        self.last_update_asn = data.get("last_update_asn")
+        self.last_update_mamid = data.get("last_update_mamid")
+        provided_last_update_time = data.get("last_update_time")
+        if provided_last_update_time:
+            provided_last_update_time = datetime.fromtimestamp(provided_last_update_time, timezone.utc)
+            self.last_update_time = provided_last_update_time
+
+    def refresh(self):
+        latest_ip = returnIP()
+        if not latest_ip:
+            logger.error("Failed to grab external IP - no internet")
+            logger.error("Checking for internet every 5 minutes")
+            time.sleep(300)
+            while (latest_ip := returnIP()) is None:
+                time.sleep(300)
+            logger.info(f"Connection restored. External IP: {latest_ip}")
+        logger.debug(f"Fetched external IP: {latest_ip}")
+        if self.ip != latest_ip:
+            if (latest_ip != self.last_update_ip) and self.last_update_ip:
+                logger.info(f"Detected IP change from last MAM session update")
+                logger.info(f"Last MAM session IP: {self.last_update_ip}")
+                logger.info(f"Current IP: {latest_ip}")
+            self.ip = latest_ip
+            if not self.dumb_mode:
+                self.asn = lookup_asn(self.ip)
+                if self.asn: logger.info(f"Current ASN: {self.asn}")
+    
+    def mam_ip_updated(self, mamid: str, update_time: bool):
+        global state
+        self.last_update_ip = self.ip
+        self.last_update_mamid = mamid
+        if update_time:
+            self.last_update_time = timeNow()
+        if self.asn:
+            self.last_update_asn = self.asn
+        else:
+            self.last_update_asn = None
+        saveData()
+
+    @property
+    def ratelimited(self) -> float | None:
+        if not self.last_update_time:
+            return None
+        seconds_remaining = (timedelta(minutes=61) - (timeNow() - self.last_update_time)).total_seconds()
+        return max(seconds_remaining, 0.0)
+        
+state = StateSingleton()
+
+class Session:
+    def __init__(self, mam_id, original_session_ip=None, ASN=None, last_update_ip=None, invalid=False):
+        self.mam_id = mam_id
+        self.original_session_ip = original_session_ip
+        self._ASN = ASN
+        self.last_update_ip = last_update_ip
+        self.invalid = invalid
+    
+    @classmethod
+    def from_dict(cls, data):
+        return cls(
+            mam_id=data["mam_id"],
+            original_session_ip=data["original_session_ip"],
+            ASN=data["ASN"],
+            last_update_ip=data["last_update_ip"],
+            invalid=data["invalid"]
+        )
+    
+    def to_dict(self):
+        return {
+            "mam_id": self.mam_id,
+            "original_session_ip": self.original_session_ip,
+            "ASN": self._ASN,
+            "last_update_ip": self.last_update_ip,
+            "invalid": self.invalid
+        }
+    
+    @property
+    def ASN(self):
+        global state
+        ip = None
+        if state.dumb_mode:
+            logger.debug("Skipping session ASN getter due to dumb_mode")
+            return None
+        if self._ASN is not None:
+            return self._ASN
+        if self.last_update_ip:
+            ip = self.last_update_ip
+        elif self.original_session_ip:
+            ip = self.original_session_ip
+        if ip:
+            output = lookup_asn(ip)
+            if output:
+                self._ASN = output
+                logger.debug(f"Fetched ASN '{output}' for mam_id: {self.mam_id}")
+                saveData()
+                return output
+            return None
+    
+    def send_session(self):
+        global state
+        state.no_current_options = False
+        r = None
+        try:
+            r = contactMAM(self.mam_id)
+            self._processResponse(r)
+            time.sleep(300)
+            return True
+        except SessionInvalidError as e:
+            logger.critical(f"{e}")
+            self.invalidate()
+            return False
+    
+    def _processResponse(self, jsonResponse):
+        json_response_msg = ""
+        global state
+        try:
+            json_response_msg = jsonResponse.json().get("msg", "").casefold()
+            logger.info(f"Received response: '{json_response_msg}'")
+        except ValueError:
+            logger.error("API response was not in JSON")
+            logger.error(f"HTTP response status code received: '{jsonResponse.status_code}'")
+            return
+        if json_response_msg == "Completed".casefold():
+            logger.info(f"MAM session IP successfully updated to: {state.ip}")
+            self.last_update_ip = state.ip
+            state.mam_ip_updated(self.mam_id, True)
+            return
+        elif json_response_msg == "No change".casefold():
+            logger.info(f"Successful exchange with MAM, however IP matches current session as {state.ip}")
+            self.last_update_ip = state.ip
+            state.mam_ip_updated(self.mam_id, False)
+            return
+        elif jsonResponse.status_code == 429:
+            logger.warning("MAM rejects due to last change too recent, and last successful update is unknown: retry in 15 minutes")
+            state.last_update_time = timeNow() - timedelta(minutes=46)
+            return
+        elif json_response_msg == "":
+            logger.warning("MAM HTTP response did not include a 'msg'")
+            logger.warning(f"HTTP response status code received: '{jsonResponse.status_code}'")
+            return
+        elif json_response_msg == "Incorrect session type".casefold():
+            logger.critical("Per MAM: 'The session cookie is not to a locked session, or not a session that is allowed the dynamic seedbox setting'")
+            raise SessionInvalidError("Response: incorrect session type")
+        elif json_response_msg == "Invalid session".casefold():
+            logger.critical("Per MAM: 'The system deemed the session invalid (bad mam_id value, or you've moved off the locked IP/ASN)'")
+            raise SessionInvalidError("Response: invalid session")
+        elif json_response_msg == "No Session Cookie".casefold():
+            logger.critical("Per MAM: 'You didn't properly provide the mam_id session cookie.'")
+            logger.critical("Your mam_id may be formatted incorrectly")
+            raise SessionInvalidError("Response: no session cookie")
+        else:
+            logger.error(f"Received unknown json response message: {json_response_msg}")
+            return
+
+    def invalidate(self):
+            logger.critical(f"INVALID SESSION:")
+            logger.critical(f"mam_id: {self.mam_id}")
+            logger.critical(f"original IP: {self.original_session_ip}")
+            logger.critical(f"last update IP: {self.last_update_ip}")
+            self.invalid = True
+            saveData()
+
+class SessionSetsSingleton:
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __init__(self):
+        # Avoid reinitialization if already constructed
+        if not hasattr(self, "_initialized"):
+            self._initialized = True
+    
+    @property
+    def valids(self) -> set[Session]:
+        global sessions
+        valids: set[Session] = set()
+        for mam_id, session in sessions.items():
+            if not session.invalid:
+                valids.add(session)
+        return valids
+    
+    @property
+    def invalids(self) -> set[Session]:
+        global sessions
+        invalids: set[Session] = set()
+        for mam_id, session in sessions.items():
+            if session.invalid:
+                invalids.add(session)
+        return invalids
+
+    @property
+    def ips(self) -> dict[str, Session]:
+        # will use original session ip if there is no last update
+        # returns a dict with key as ip and value as session
+        global sessions
+        ips: dict[str, Session] = {}
+        for mam_id, session in sessions.items():
+            if session.invalid:
+                continue
+            if isinstance(session.last_update_ip, str):
+                if session.last_update_ip in ips:
+                    logger.warning("While building IP list, duplicate was found - invaliding session")
+                    session.invalidate()
+                    continue
+                ips[session.last_update_ip] = session
+                continue
+            if isinstance(session.original_session_ip, str):
+                if session.original_session_ip in ips:
+                    logger.warning("While building IP list, duplicate was found - invaliding session")
+                    session.invalidate()
+                    continue
+                ips[session.original_session_ip] = session
+                continue
+        return ips
+    
+    @property
+    def asns(self) -> dict[str, Session]:
+        global sessions
+        asns: dict[str, Session] = {}
+        for mam_id, session in sessions.items():
+            if session.invalid:
+                continue
+            if isinstance(session.ASN, str):
+                if session.ASN in asns:
+                    logger.warning("While building ASN list, duplicate was found - invaliding session")
+                    session.invalidate()
+                    continue
+                asns[session.ASN] = session
+        return asns
+
+session_sets = SessionSetsSingleton()
+
+def lookup_asn(ip) -> str | bool:
+    url = f"https://api.hackertarget.com/aslookup/?q={ip}&output=json"
+    # url = f"https://api.ipinfo.io/lite/{ip}" probably blocks vpns
+    try:
+        logger.debug(f"ASN lookup for: {ip}")
+        response = requests.get(url, timeout=5)
+        response.raise_for_status()
+        data = response.json()
+        logger.debug(f"ASN lookup response: {data.get('asn', '')}")
+        asn = data.get("asn", "")
+        return asn if asn else False
+    except requests.RequestException as e:
+        logger.error(f"Error fetching ASN: {e}") # will need more elaborate error processing for poorly formatted ips and such
         return False
-    return (timeNow() - timestamp) <= timedelta(minutes=60)
+
+sessions: dict[str, Session] = {}
+
+env_debug = os.getenv("DEBUG")
+
+json_path = Path('/data/mamapi_multisession.json')
+
+def timeNow(): return datetime.now(timezone.utc)
+
+class TimeEnabledJSONEncoder(json.JSONEncoder):
+    def default(self, o):
+        if isinstance(o, datetime):
+            obj = o.timestamp()
+            return obj
+        return super().default(o)
 
 def loadData():
+    global sessions, state
+    logger.debug("Loading data from json")
+    sessions.clear()
     try:
         with open(json_path) as f:
             data = json.load(f)
-            if set(data.keys()) == set(blankTemplate.keys()):
-                data["last_successful_update"] = datetime.fromtimestamp(data["last_successful_update"], timezone.utc)
-                return data
-            else:
-                logger.warning("Number of entries in .json data does not match template, refreshing")
-                return blankTemplate
-    except (FileNotFoundError, json.JSONDecodeError):
-        return blankTemplate
+            if "state" in data:
+                state.load(data["state"])
+            for mam_id, session in data.get("sessions", {}).items():
+                sessions[mam_id] = Session.from_dict(session)
+    except FileNotFoundError:
+        logger.warning("Session data file not found, starting fresh")
+    except json.JSONDecodeError:
+        logger.warning("Session data file is corrupt or invalid, starting fresh")
     except PermissionError:
-        logger.critical("Loading .json data threw permission error - likely lacking read permission.")
+        logger.critical("Permission error when reading session data file")
         logger.critical("EXITING SCRIPT")
         sys.exit(1)
 
 def saveData():
-    json_serializable_data = copy.deepcopy(json_data)
-    for key, value in json_serializable_data.items():
-        if isinstance(value, datetime):
-            json_serializable_data[key] = value.timestamp()
+    global sessions, state
+    saveDict = {
+        "state": state.to_dict(),
+        "sessions": {mam_id: session.to_dict() for mam_id, session in sessions.items()}
+    }
     with open(json_path, "w") as f:
-        json.dump(json_serializable_data, f, indent=4)
+        json.dump(saveDict, f, indent=4, cls=TimeEnabledJSONEncoder)
 
 def returnIP():
-    global internet_is_out
+    global state
     logger.debug("Attempting to grab external IP...")
     try:
         r = requests.get("https://api.ipify.org")
     except requests.exceptions.ConnectionError:
-        if not internet_is_out:
-            logger.error("Failed to grab external IP - no internet")
-            logger.error("Checking for internet every 5 minutes")
         logger.debug("Failed internet check")
-        internet_is_out = True
-        time.sleep(300)
-        return False
+        return None
     except requests.exceptions.Timeout:
-        logger.error(f"Request to external IP tracker timed out")
-        logger.error("Sleeping for 10 minutes")
-        internet_is_out = True
-        time.sleep(600)
-        return False
+        logger.error("Request to external IP tracker timed out")
+        return None
     except requests.exceptions.RequestException as err:
         logger.error(f"Unexpected error during HTTP GET: {err}")
-        logger.error("Sleeping for 10 minutes")
-        internet_is_out = True
-        time.sleep(600)
-        return False
+        return None
     if r.status_code == 200:
-        if internet_is_out:
-            logger.info("Connection restored")
-            logger.info(f"Fetched external IP: {r.text}")
-            internet_is_out = False
-            return r.text
-        else:
-            logger.debug(f"Fetched external IP: {r.text}")
-            return r.text
+        return r.text
     else:
         logger.error("External IP check failed for unknown reason")
-        logger.error("Sleeping for 10 minutes")
-        internet_is_out = True
-        time.sleep(600)
-        return False
+        return None
 
 def briefReturnIP():
     try:
@@ -119,48 +385,18 @@ def briefReturnIP():
         logger.error("Initialization IP check failed")
         return False
 
-def chooseMAM_ID():
-    global json_data
-    env_mam_id = os.getenv("MAM_ID")
-    if not env_mam_id:
-        logger.critical("No mam_id assigned to environment variable")
-        logger.critical("EXITING SCRIPT")
-        sys.exit(1)
-    if json_data["last_mam_id_invalid"] and (env_mam_id == json_data["last_mam_id"]):
-        logger.critical("This mam_id/session was previously marked as invalid")
-        logger.critical("Please generate a new mam_id/session")
-        logger.critical("See the thread for the latest discussion of this issue")
-        logger.critical("If you are still seeing this after changing your mam_id, you may need to rebuild the container to apply the new value")
-        logger.critical("EXITING SCRIPT")
-        sys.exit(1)
-    if env_mam_id != json_data["last_mam_id"]:
-        logger.info("Detected new mam_id - clearing previous session data")
-        json_data = blankTemplate.copy()
-        json_data["last_mam_id"] = env_mam_id
-        saveData()
-    logger.debug(f"Using mam_id: {env_mam_id}")
-    return env_mam_id
-
 def contactMAM(inputMAMID):
     while True:
         for attempt in range(3):
             try:
                 logger.info("Sending cookie to MAM...")
                 r = requests.get("https://t.myanonamouse.net/json/dynamicSeedbox.php", cookies={"mam_id": inputMAMID})
-                # r.raise_for_status()
                 logger.debug(f"Received HTTP status code: '{r.status_code}'")
-                if r.status_code == 500:
-                    logger.critical("Received HTTP status code '500'")
-                    logger.critical("This is usually due to an incorrectly formatted mam_id")
-                    logger.critical("EXITING SCRIPT")
-                    sys.exit(1)
                 return r
             except requests.exceptions.ConnectionError:
                 logger.error(f"No internet. Attempt #: {attempt + 1}")
             except requests.exceptions.Timeout:
                 logger.error(f"Request timed out. Attempt #: {attempt + 1}")
-            # except requests.exceptions.HTTPError as err:
-            #     logger.error(f"HTTP error: '{err}'. Attempt #: {attempt + 1}") this is grabbing stuff before i can process the message
             except requests.exceptions.RequestException as err:
                 logger.error(f"Unexpected error during HTTP GET: {err}")
             if attempt < 2:
@@ -169,98 +405,128 @@ def contactMAM(inputMAMID):
             logger.error("Multiple HTTP GET failures: sleeping for 30 minutes")
             time.sleep(1800)
 
-def processResponse(jsonResponse):
-    json_response_msg = ""
-    try:
-        json_response_msg = jsonResponse.json().get("msg", "").casefold()
-        logger.info(f"Received response: '{json_response_msg}'")
-    except ValueError:
-        logger.error("API response was not in JSON")
-        logger.error(f"HTTP response status code received: '{jsonResponse.status_code}'")
-    if json_response_msg == "Completed".casefold():
-        logger.info(f"MAM session IP successfully updated to: {current_ip}")
-        logger.info("Sleeping for 1 hour (earlier requests would be ratelimited)")
-        json_data["last_updated_ip"] = current_ip
-        json_data["last_successful_update"] = timeNow()
-        saveData()
-        time.sleep(3660)
-    elif json_response_msg == "No change".casefold():
-        logger.info(f"Successful exchange with MAM, however IP matches current session as {current_ip}")
-        json_data["last_updated_ip"] = current_ip
-        saveData()
-        time.sleep(300)
-    elif json_response_msg == "Last Change too recent".casefold():
-        logger.warning("MAM rejects due to last change too recent, and last successful update is unknown: retrying in 30 minutes")
-        json_data["last_successful_update"] = datetime.fromtimestamp(0, timezone.utc)
-        saveData()
-        time.sleep(1800)
-    elif json_response_msg == "Incorrect session type".casefold():
-        logger.critical("Per MAM: 'The session cookie is not to a locked session, or not a session that is allowed the dynamic seedbox setting'")
+def parseMAMID() -> dict[str, str | None]:
+    global state
+    logger.debug("Parsing env mamids")
+    env = os.getenv("MAM_ID")
+    if not env:
+        logger.critical("No mam_ids assigned to environment variable")
         logger.critical("EXITING SCRIPT")
         sys.exit(1)
-    elif json_response_msg == "Invalid session".casefold():
-        logger.critical("Per MAM: 'The system deemed the session invalid (bad mam_id value, or you've moved off the locked IP/ASN)'")
-        logger.critical("See the thread for the latest discussion of this issue")
-        logger.debug("Marking current mam_id as invalid")
-        json_data["last_mam_id_invalid"] = True
-        saveData()
+    entries = env.split(",")
+    parsed_mamids: dict[str, str | None] = {}
+    for entry in entries:
+        parts = entry.strip().split("@")
+        mam_id = parts[0].strip()
+        original_ip = parts[1].strip() if len(parts) == 2 else None
+        if (len(entries) != 1) and (not original_ip):
+            logger.warning(f"Skipping mam_id with missing ip in entry: '{entry}'")
+            continue
+        if not mam_id:
+            logger.warning(f"Skipping empty mam_id in entry: '{entry}'")
+            continue
+        parsed_mamids[mam_id] = original_ip
+    if len(parsed_mamids) == 0:
+        logger.critical("Parsing mam_id environment variable returned no mam_ids")
         logger.critical("EXITING SCRIPT")
         sys.exit(1)
-    elif json_response_msg == "No Session Cookie".casefold():
-        logger.critical("Per MAM: 'You didn't properly provide the mam_id session cookie.'")
-        logger.critical(f"Used the following mam_id for this request: {mam_id}")
-        logger.critical("Your mam_id may be formatted incorrectly")
-        logger.critical("EXITING SCRIPT")
-        sys.exit(1)
-    elif json_response_msg == "":
-        logger.warning("MAM HTTP response did not include a 'msg'")
-        logger.error(f"HTTP response status code received: '{jsonResponse.status_code}'")
-        time.sleep(300)
-    else:
-        logger.error(f"Received unknown json response message: {json_response_msg}")
-        time.sleep(300)
+    if len(parsed_mamids) == 1:
+        for mam_id, original_ip in parsed_mamids.items():
+            if not original_ip:
+                state.dumb_mode = True
+                logger.info("Received one mam_id without IP session info - assuming ASN unaware behavior is preferred")
+    if env_debug:
+        logger.debug("Successfully parsed the following mam_ids:")
+        for mam_id, original_ip in parsed_mamids.items():
+            logger.debug(f"mam_id: {mam_id}")
+            logger.debug(f"original_ip: {original_ip}")
+    return parsed_mamids
+
+def syncSessions():
+    global sessions
+    parsed_mamids = parseMAMID()
+    logger.debug("Syncing env mam_ids with loaded sessions")
+    env_mam_ids = set(parsed_mamids.keys())
+    cached_mam_ids = set(sessions.keys())
+    for session_mam_id, session_obj in list(sessions.items()):
+        if session_mam_id not in env_mam_ids:
+            logger.info(f"mam_id exists in cache but not in env, deleting '{session_mam_id}'")
+            del sessions[session_mam_id]
+    for env_mam_id in env_mam_ids:
+        if env_mam_id in cached_mam_ids:
+            continue
+        logger.info(f"mam_id exists in env but not in cache, adding '{env_mam_id}'")
+        sessions[env_mam_id] = Session(env_mam_id, parsed_mamids[env_mam_id])
+    saveData()
 
 try:
     logger.setLevel(logging.INFO)
     logger.info("STARTING SCRIPT")
     logger.info("https://github.com/elforkhead/mamapi")
+    logger.info("v2.0 - now with support for multiple mam_ids and ASNs")
+    logger.info("Checking for IP changes every 5 minutes")
     briefReturnIP()
-    if os.getenv("DEBUG"):
+    if env_debug:
         logger.setLevel(logging.DEBUG)
         logger.info("Logger level: DEBUG (enabled by DEBUG env var)")
-    logger.info("Checking for IP changes every 5 minutes")
-    json_data = loadData()
-    mam_id = chooseMAM_ID()
+    loadData()
+    syncSessions()
+    if session_sets.invalids:
+        logger.warning("Detected the following invalid mam_ids/sessions - remove these from your env")
+        for session in session_sets.invalids:
+            logger.warning(f"INVALID SESSION:")
+            logger.warning(f"mam_id: {session.mam_id}")
+            logger.warning(f"original IP: {session.original_session_ip}")
+            logger.warning(f"last update IP: {session.last_update_ip}")
     while True:
-        current_ip = returnIP()
-        if not current_ip:
+        if not state.dumb_mode: 
+            for session in session_sets.valids:
+                if not session.ASN:
+                    if state.first_run:
+                        logger.warning(f"Could not grab ASN on initialization for session: {session.mam_id}")
+        state.first_run = False
+        if not session_sets.valids:
+            logger.critical("No available valid sessions - wipe all of your env mam_ids and start fresh")
+            logger.critical("EXITING SCRIPT")
+            sys.exit(1)
+        if state.ratelimited and state.last_update_time:
+            logger.info(f"Last successful IP update was at {state.last_update_time.astimezone().strftime('%Y-%m-%d %H:%M')}. Sleeping for {round(state.ratelimited / 60)} minutes")
+            time.sleep(state.ratelimited)
             continue
-        if current_ip == json_data["last_updated_ip"]:
-            if first_run:
-                logger.info("Current IP matches last recorded update sent to MAM")
-                first_run = False
+        state.refresh()
+        if state.ip == state.last_update_ip:
             logger.debug("Current IP identical to last update sent to MAM, sleeping for 5 minutes")
             time.sleep(300)
             continue
-        if rateLimited(json_data["last_successful_update"]):
-            deltaTo60 = 0
-            minutes_remaining = 0
-            deltaTo60 = timedelta(hours=1) - (timeNow() - json_data["last_successful_update"])
-            minutes_remaining = math.ceil(max(deltaTo60.total_seconds() / 60, 0))
-            logger.info(f"Current IP ({current_ip}) is different than previous update ({json_data['last_updated_ip']}), but we are currently rate limited.")
-            logger.debug(f"rateLimited function returned positive: time delta calculated as {minutes_remaining} minutes")
-            logger.info(f"Last successful IP update was at {json_data["last_successful_update"].astimezone().strftime('%Y-%m-%d %H:%M')}. Sleeping for {minutes_remaining} minutes until an hour has passed")
-            first_run = False
-            time.sleep((minutes_remaining * 60) + 2)
-        else:
-            first_run = False
-            if json_data["last_updated_ip"]:
-                logger.info(f"Detected IP change. Old IP: '{json_data["last_updated_ip"]}' New IP: '{current_ip}'")
-            else:
-                logger.info("No recorded session IP - attempting to update session")
-            r = contactMAM(mam_id)
-            processResponse(r)
+        if state.dumb_mode:
+            if len(sessions) != 1:
+                logger.critical("ERROR: entered dumb_mode with more than one session. Please report this error")
+                logger.critical("EXITING SCRIPT")
+                sys.exit(1)
+            for session in sessions.values():
+                logger.debug("Sending dumb session...")
+                session.send_session()
             continue
+        if not state.asn:
+            logger.warning("Could not retrieve current ASN, the ASN API may be invalid or ratelimited")
+            logger.warning("Retrying in 5 minutes")
+            time.sleep(300)
+            continue
+        if state.ip in session_sets.ips:
+            logger.info("Current IP is associated with a mam_id. Sending update with matching mam_id...")
+            session_sets.ips[state.ip].send_session()
+            continue
+        if state.asn in session_sets.asns:
+            logger.info("Current ASN is associated with a mam_id. Sending update with matching mam_id...")
+            session_sets.asns[state.asn].send_session()
+            continue
+        if not state.no_current_options:
+            logger.warning("No sessions matching the current IP or ASN exist, will recheck every 5 minutes in case the IP changes to a matching IP/ASN")
+            logger.warning("This can occur if the script fails to fetch ASNs for your mam_ids")
+            logger.warning(f"Consider making an additional session to match the current IP: '{state.ip}'")
+        state.no_current_options = True
+        time.sleep(300)
 except Exception as e:
     logger.critical(f"Caught exception: {e}")
     logger.critical("EXITING SCRIPT")
+    sys.exit(1)

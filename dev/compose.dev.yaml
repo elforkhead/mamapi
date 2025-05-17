@@ -9,7 +9,7 @@ services:
       - ../instance/data:/data
       - ../mamapi.py:/usr/src/app/mamapi.py:ro
     environment:
-      - MAM_ID=${MAM_ID}
-      - DEBUG=${DEBUG}
-      - TZ=${TZ}
+      MAM_ID: ${MAM_ID}
+      DEBUG: ${DEBUG}
+      TZ: ${TZ}
     network_mode: "container:gluetun"
