@@ -14,8 +14,8 @@ services:
       TZ: Etc/UTC #https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
 ```
 ---
-## ASN awareness:
-You can provide the IP used to create a particular session/mam_id to enable ASN awareness. The IP will be used to find the ASN expected by that particular session. The script will determine the ASN of your connection, and will select the appropriate mam_id to use. If no mam_id has an ASN matching your current IP, the script will hang to avoid invalidating any sessions, and provide feedback to help you create another session.
+## ASN awareness/multisession support:
+Provide the IP used to create your mam_id to enable ASN awareness. The script will only use a session that matches your current ASN to avoid session invalidations. You can provide more than one mam_id/IP combo to cover multiple ASNs, and the script will select the one that matches your current ASN.
 
 ASN aware/multisession MAM_ID compose format:
 ```yaml
@@ -31,7 +31,7 @@ services:
         @3.3.3.3
 ```
 
-If you are not applying the env variable directly in the compose file (such as through a .env), you will need to provide it as a single string without linebreaks:
+If you are not applying the env variable directly in the compose file (such as through a .env), you can provide it as a single string without linebreaks:
 ```
 "firstmamidhereoneline@1.1.1.1, secondmamidhereoneline@2.2.2.2, thirdmamidhereoneline@3.3.3.3"
 ```
