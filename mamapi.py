@@ -8,6 +8,9 @@ import math
 import copy
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
+from collections.abc import Callable, MutableMapping
+from typing import Any
+from urllib.parse import urlparse, urlunparse
 
 logger = logging.getLogger(__name__)
 formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="[%Y-%m-%d %H:%M:%S]")
@@ -351,6 +354,103 @@ def saveData():
     }
     with open(json_path, "w") as f:
         json.dump(saveDict, f, indent=4, cls=TimeEnabledJSONEncoder)
+    prowlarr = os.getenv("UPDATE_PROWLARR")
+    if prowlarr:
+        update_prowlarr(state.last_update_mamid)
+
+def _normalize_url(url: str) -> None | str:
+    if not url.startswith(('http://', 'https://')):
+        url = 'http://' + url
+
+    parsed = urlparse(url)
+
+    if not parsed.hostname:
+        logger.error(f"Invalid URL: '{url}'")
+        return None
+
+    normalized = urlunparse(parsed._replace(scheme=parsed.scheme.lower()))
+    return normalized
+
+def update_prowlarr(new_mam_id: str) -> None:
+    prowlarr_api = os.getenv("PROWLARR_API")
+    prowlarr_url = os.getenv("PROWLARR_URL")
+    if not prowlarr_api:
+        logger.error("Cannot update Prowlarr. PROWLARR_API not set.")
+        return
+    if not prowlarr_url:
+        logger.error("Cannot update Prowlarr. PROWLARR_URL not set.")
+        return
+    prowlarr_url = _normalize_url(prowlarr_url)
+    if prowlarr_url is None:
+        return
+    prowlarr_mam_url = f"{prowlarr_url}/api/v1/indexer/22?apikey={prowlarr_api}"
+    logger.debug(f"Prowlarr MAM URL: {prowlarr_mam_url}")
+    mam_config = _get_prowlarr_mam_config(prowlarr_mam_url)
+    if mam_config is None:
+        return
+    mam_config = _update_prowlarr_mam_id(mam_config, new_mam_id)
+    if mam_config is None:
+        return
+    _write_updated_prowlarr_config(prowlarr_mam_url, mam_config)
+
+def _get_prowlarr_mam_config(url: str) -> None | MutableMapping[str, Any]:
+    try:
+        response = requests.get(url)
+    except requests.exceptions.ConnectionError:
+        logger.error("Cannot connect to Prowlarr to get config")
+        return None
+    except requests.exceptions.Timeout:
+        logger.error("Request timed out getting Prowlarr config")
+        return None
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Unexpected error during HTTP GET for Prowlarr config: {e.__class__.__qualname__}: {e}")
+        return None
+    if response.status_code != 200:
+        logger.error(f"Prowlarr get failed with status {response.status_code}")
+        return None
+    try:
+        mam_config = response.json()
+    except ValueError:
+        logger.error("Prowlarr response is not in JSON format")
+        return None
+    return mam_config
+
+def _update_prowlarr_mam_id(mam_config: MutableMapping[str, Any], new_mam_id: str) -> None | MutableMapping[str, Any]:
+    fields = mam_config.get('fields',[])
+    mam_field = {}
+    mam_field_num = None
+    for index, field in enumerate(fields):
+        if field.get("name") == "mamId":
+            mam_id_field = field
+            mam_id_field_num = index
+    if mam_id_field_num is None:
+        logger.error("Cannot update Prowlarr. mam_id not found in Prowlarr.")
+        return None
+    old_mam_id = mam_id_field.get("value","")
+    if new_mam_id == old_mam_id:
+        logger.debug("mam_id unchanged in Prowlarr")
+        return None
+    logger.debug("Changing mam_id in Prowlarr")
+    mam_config['fields'][mam_id_field_num]['value'] = new_mam_id
+    return mam_config
+
+def _write_updated_prowlarr_config(url: str, mam_config: MutableMapping[str, Any]) -> None:
+    headers = {'Content-type': 'application/json'}
+    try:
+        response = requests.put(url, json=mam_config, headers=headers)
+    except requests.exceptions.ConnectionError:
+        logger.error("Cannot connect to Prowlarr to update config")
+        return
+    except requests.exceptions.Timeout:
+        logger.error("Request timed out updating Prowlarr config")
+        return
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Unexpected error during HTTP PUT for Prowlarr config: {e.__class__.__qualname__}: {e}")
+        return
+    if response.status_code != 202:
+        logger.error(f"Prowlarr PUT failed with status {response.status_code}")
+        return
+    logger.info("Prowlarr config updated with new mam_id")
 
 def returnIP():
     global state
@@ -527,6 +627,6 @@ try:
         state.no_current_options = True
         time.sleep(300)
 except Exception as e:
-    logger.critical(f"Caught exception: {e}")
+    logger.critical(f"Caught exception: {e.__class__.__qualname__}: {e}")
     logger.critical("EXITING SCRIPT")
     sys.exit(1)
