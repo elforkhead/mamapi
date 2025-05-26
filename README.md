@@ -36,6 +36,21 @@ If you are not applying the env variable directly in the compose file (such as t
 "firstmamidhereoneline@1.1.1.1, secondmamidhereoneline@2.2.2.2, thirdmamidhereoneline@3.3.3.3"
 ```
 ---
+
+## Example compose entries to update Prowlarr
+
+Add all 3 environment variables:
+
+```yaml
+services:
+  mamapi:
+    environment:
+      UPDATE_PROWLARR: true
+      PROWLARR_URL: http://192.168.0.2:9696
+      PROWLARR_API: 123456789
+```
+
+---
 ## Example compose entries for use with gluetun:
 Run behind a gluetun service in the same compose as mamapi:
 ```yaml
