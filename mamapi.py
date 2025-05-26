@@ -403,7 +403,7 @@ def saveData() -> None:
         update_prowlarr(state.last_update_mamid)
 
 
-def _normalize_url(url: str) -> None | str:
+def _normalize_url(url: str) -> str | None:
     if not url.startswith(("http://", "https://")):
         url = "http://" + url
 
@@ -411,6 +411,10 @@ def _normalize_url(url: str) -> None | str:
 
     if not parsed.hostname:
         logger.error("Invalid URL: '%s'", url)
+        return None
+
+    if parsed.port and not (1 <= parsed.port <= 65535):
+        logger.error("Invalid port in URL: '%s'", url)
         return None
 
     return urlunparse(parsed._replace(scheme=parsed.scheme.lower()))
