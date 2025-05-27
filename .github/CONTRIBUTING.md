@@ -1,0 +1,7 @@
+Thank you for considering a contribution to this project! Please keep a few things in mind: **tl;dr - most users are not tech savvy. keep it simple. probably talk to me first.**
+
+- This project is intended to be narrow in scope for maximum long-term maintainability. Integrations with other programs introduce points of failure and will be considered carefully.
+- **99% of this script's users will only use the base session updating functionality, _maybe_ with ASN awareness/multisession. They are not comfortable with docker or handling permission issues. They do not know, or care to learn, how to use advanced features.** 
+- Extra functionality should be completely optional and gated behind env variables buried in the readme. The average user running this with only mam_id and tz env variables should have no idea there are other features available, and should under no circumstances be exposed to errors related to disabled features.
+- PRs should be as granular as possible. Please do not wrap multiple features into one PR. Please keep formatting/syntax changes in the script to a minimum in areas that aren't relevant to your feature. Separate PRs to suggest formatting/syntax changes are welcome.
+- Adding all of the above up, I am very careful about accepting PRs and would encourage you to start with a feature request issue before sinking your time into this project.
