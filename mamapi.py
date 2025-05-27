@@ -313,6 +313,7 @@ sessions: dict[str, Session] = {}
 env_debug = os.getenv("DEBUG")
 
 json_path = Path('/data/mamapi_multisession.json')
+latest_mam_path = Path('/data/mam_id.latest')
 
 def timeNow(): return datetime.now(timezone.utc)
 
@@ -351,6 +352,8 @@ def saveData():
     }
     with open(json_path, "w") as f:
         json.dump(saveDict, f, indent=4, cls=TimeEnabledJSONEncoder)
+    with open(latest_mam_path,"w") as f:
+        f.write(state.last_update_mamid)
 
 def returnIP():
     global state
