@@ -301,7 +301,7 @@ def lookup_asn(ip) -> str | bool:
     # url = f"https://api.ipinfo.io/lite/{ip}" probably blocks vpns
     try:
         logger.debug(f"ASN lookup for: {ip}")
-        response = requests.get(url, timeout=5)
+        response = requests.get(url, timeout=(5, 15))
         response.raise_for_status()
         data = response.json()
         logger.debug(f"ASN lookup response: {data.get('asn', '')}")
@@ -353,7 +353,7 @@ def returnIP():
     global state
     logger.debug("Attempting to grab external IP...")
     try:
-        r = requests.get("https://api.ipify.org")
+        r = requests.get("https://api.ipify.org", timeout=(5, 15))
     except requests.exceptions.ConnectionError:
         logger.debug("Failed internet check")
         return None
@@ -371,7 +371,7 @@ def returnIP():
 
 def briefReturnIP():
     try:
-        r = requests.get("https://api.ipify.org")
+        r = requests.get("https://api.ipify.org", timeout=(5, 15))
     except requests.exceptions.RequestException as e:
         logger.error(f"Initialization IP check failed: {e}")
         return False
@@ -387,7 +387,7 @@ def contactMAM(inputMAMID):
         for attempt in range(3):
             try:
                 logger.info("Sending cookie to MAM...")
-                r = requests.get("https://t.myanonamouse.net/json/dynamicSeedbox.php", cookies={"mam_id": inputMAMID})
+                r = requests.get("https://t.myanonamouse.net/json/dynamicSeedbox.php", cookies={"mam_id": inputMAMID}, timeout=(5, 15))
                 logger.debug(f"Received HTTP status code: '{r.status_code}'")
                 return r
             except requests.exceptions.ConnectionError:
