@@ -104,8 +104,6 @@ class StateSingleton:
             return None
         seconds_remaining = (timedelta(minutes=61) - (timeNow() - self.last_update_time)).total_seconds()
         return max(seconds_remaining, 0.0)
-        
-state = StateSingleton()
 
 class Session:
     def __init__(self, mam_id, original_session_ip=None, ASN=None, last_update_ip=None, invalid=False):
@@ -291,7 +289,12 @@ class SessionSetsSingleton:
                 asns[session.ASN] = session
         return asns
 
-session_sets = SessionSetsSingleton()
+class TimeEnabledJSONEncoder(json.JSONEncoder):
+    def default(self, o):
+        if isinstance(o, datetime):
+            obj = o.timestamp()
+            return obj
+        return super().default(o)
 
 def lookup_asn(ip) -> str | bool:
     url = f"https://api.hackertarget.com/aslookup/?q={ip}&output=json"
@@ -308,20 +311,14 @@ def lookup_asn(ip) -> str | bool:
         logger.error(f"Error fetching ASN: {e}") # will need more elaborate error processing for poorly formatted ips and such
         return False
 
-sessions: dict[str, Session] = {}
-
-env_debug = os.getenv("DEBUG")
-
-json_path = Path('/data/mamapi_multisession.json')
-
 def timeNow(): return datetime.now(timezone.utc)
 
-class TimeEnabledJSONEncoder(json.JSONEncoder):
-    def default(self, o):
-        if isinstance(o, datetime):
-            obj = o.timestamp()
-            return obj
-        return super().default(o)
+def boolify_string(value: str | None) -> str | bool | None:
+    if value == None: return None
+    casefolded_value = value.casefold()
+    if casefolded_value == "false": return False
+    if casefolded_value == "true": return True
+    return value
 
 def loadData():
     global sessions, state
@@ -458,6 +455,12 @@ def syncSessions():
         logger.info(f"mam_id exists in env but not in cache, adding '{env_mam_id}'")
         sessions[env_mam_id] = Session(env_mam_id, parsed_mamids[env_mam_id])
     saveData()
+
+env_debug = boolify_string(os.getenv("DEBUG"))
+sessions: dict[str, Session] = {}
+json_path = Path('/data/mamapi_multisession.json')
+session_sets = SessionSetsSingleton()
+state = StateSingleton()
 
 try:
     logger.setLevel(logging.INFO)
