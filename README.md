@@ -13,6 +13,10 @@ services:
       MAM_ID: yourmamapiinfohere
       TZ: Etc/UTC #https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
 ```
+Also available from GHCR:
+```yaml
+    image: ghcr.io/elforkhead/mamapi:latest
+```
 ---
 ## ASN awareness/multisession support
 Provide the IP used to create your mam_id to enable ASN awareness. The script will only use a session that matches your current ASN to avoid session invalidations. You can provide more than one mam_id/IP combo to cover multiple ASNs, and the script will select the one that matches your current ASN.
