@@ -7,7 +7,7 @@ import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-import requests
+import requests  # type: ignore
 
 logger = logging.getLogger(__name__)
 formatter = logging.Formatter(
@@ -443,11 +443,13 @@ def interruptable_sleep(sleeptime: float) -> None:
         sys.exit(0)
 
 
-def returnIP() -> None | str:
-    global state
+def returnIP(return_current: bool = False) -> None | str:
     logger.debug("Attempting to grab external IP...")
+    # ipify_url = "https://api.ipify.org"
+    mamip_url = "https://t.myanonamouse.net/json/jsonIp.php"
+    url = mamip_url
     try:
-        r = requests.get("https://api.ipify.org", timeout=(5, 15))
+        r = requests.get(url, timeout=(5, 15))
     except requests.exceptions.ConnectionError:
         logger.debug("Failed internet check")
         return None
@@ -458,24 +460,17 @@ def returnIP() -> None | str:
         logger.error(f"Unexpected error during HTTP GET: {err}")
         return None
     if r.status_code == 200:
-        return r.text
+        json_response_ip = r.json().get("ip", "")
+        if return_current:
+            logger.info(f"Current IP: {json_response_ip}")
+        return json_response_ip
+        # if url == ipify_url:
+        #     if return_current:
+        #         logger.info(f"Current IP: {r.text}")
+        #     return r.text
     else:
         logger.error("External IP check failed for unknown reason")
         return None
-
-
-def briefReturnIP() -> bool:
-    try:
-        r = requests.get("https://api.ipify.org", timeout=(5, 15))
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Initialization IP check failed: {e}")
-        return False
-    if r.status_code == 200:
-        logger.info(f"Current IP: {r.text}")
-        return True
-    else:
-        logger.error("Initialization IP check failed")
-        return False
 
 
 def contactMAM(inputMAMID: str):
@@ -582,7 +577,7 @@ try:
     logger.info("https://github.com/elforkhead/mamapi")
     logger.info("v2.0 - now with support for multiple mam_ids and ASNs")
     logger.info("Checking for IP changes every 5 minutes")
-    briefReturnIP()
+    returnIP(True)
     if env_debug:
         logger.setLevel(logging.DEBUG)
         logger.info("Logger level: DEBUG (enabled by DEBUG env var)")
