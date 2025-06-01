@@ -679,6 +679,10 @@ try:
             )
         state.no_current_options = True
         interruptable_sleep(300)
+except SleepInterruptException:
+    logger.info("Received close signal")
+    logger.info("EXITING SCRIPT")
+    sys.exit(0)
 except Exception as e:
     logger.critical(f"Caught exception: {e}")
     logger.critical("EXITING SCRIPT")
