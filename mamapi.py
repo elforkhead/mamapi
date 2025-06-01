@@ -377,7 +377,7 @@ def boolify_string(value: str | None) -> str | bool | None:
 
 
 def loadData():
-    global sessions, state
+    global sessions, state, env_write_current_mamid
     logger.debug("Loading data from json")
     sessions.clear()
     try:
@@ -395,16 +395,34 @@ def loadData():
         logger.critical("Permission error when reading session data file")
         logger.critical("EXITING SCRIPT")
         sys.exit(1)
+    if env_write_current_mamid:
+        try:
+            logger.debug("Creating/blanking current_mamid file")
+            with open(write_current_mamid_path, "w") as f:
+                pass
+        except Exception as e:
+            logger.warning(f"Caught exception when making blank current_mamid: {e}")
+            logger.warning("Disabling current_mamid writing")
+            env_write_current_mamid = False
 
 
 def saveData():
-    global sessions, state
+    global sessions, state, env_write_current_mamid
     saveDict = {
         "state": state.to_dict(),
         "sessions": {mam_id: session.to_dict() for mam_id, session in sessions.items()},
     }
     with open(json_path, "w") as f:
         json.dump(saveDict, f, indent=4, cls=TimeEnabledJSONEncoder)
+    if env_write_current_mamid and state.last_update_mamid:
+        logger.debug("Writing current_mamid to file")
+        try:
+            with open(write_current_mamid_path, "w") as f:
+                f.write(state.last_update_mamid)
+        except Exception as e:
+            logger.warning(f"Caught exception when writing current_mamid: {e}")
+            logger.warning("Disabling current_mamid writing")
+            env_write_current_mamid = False
 
 
 def returnIP() -> None | str:
@@ -529,6 +547,8 @@ def syncSessions():
 
 
 env_debug = boolify_string(os.getenv("DEBUG"))
+env_write_current_mamid = boolify_string(os.getenv("WRITE_CURRENT_MAMID"))
+write_current_mamid_path = Path("/data/current_mamid")
 sessions: dict[str, Session] = {}
 json_path = Path("/data/mamapi_multisession.json")
 session_sets = SessionSetsSingleton()

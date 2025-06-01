@@ -64,3 +64,9 @@ Debug-level logging. Not recommended for general use.
 ```yaml
 DEBUG: True
 ```
+
+Write the mam_id in use to a "current_mamid" file in the data directory
+
+```yaml
+WRITE_CURRENT_MAMID: True
+```

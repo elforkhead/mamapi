@@ -12,4 +12,5 @@ services:
       MAM_ID: ${MAM_ID}
       DEBUG: ${DEBUG}
       TZ: ${TZ}
+      WRITE_CURRENT_MAMID: ${WRITE_CURRENT_MAMID}
     network_mode: "container:gluetun"
