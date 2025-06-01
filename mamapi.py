@@ -7,6 +7,7 @@ import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import apprise
 import requests  # type: ignore
 
 logger = logging.getLogger(__name__)
@@ -251,6 +252,10 @@ class Session:
             return
 
     def invalidate(self):
+        notify(
+            "invalidated session",
+            "One of your sessions was invalidated. See the log for details.",
+        )
         logger.critical("INVALID SESSION:")
         logger.critical(f"mam_id: {self.mam_id}")
         logger.critical(f"original IP: {self.original_session_ip}")
@@ -348,6 +353,34 @@ class TimeEnabledJSONEncoder(json.JSONEncoder):
         return super().default(o)
 
 
+def notify(notification_title: str, notification_body: str) -> None:
+    if env_notify_urls:
+        apobj = apprise.Apprise()
+        for url in env_notify_urls.split(","):
+            url = url.strip()
+            if url:
+                apobj.add(url)
+        apobj.notify(title=f"[mamapi]: {notification_title}", body=notification_body)
+
+
+def close_script(
+    exit_message: str,
+    exit_code: float = 0,
+    notify_title: str | None = None,
+    notify_body: str | None = None,
+) -> None:
+    if exit_code == 0:
+        logger.info(exit_message)
+        logger.info("EXITING SCRIPT")
+        sys.exit(0)
+    if exit_code == 1:
+        if notify_title and notify_body:
+            notify(notify_title, notify_body)
+        logger.critical(exit_message)
+        logger.critical("EXITING SCRIPT")
+        sys.exit(1)
+
+
 def lookup_asn(ip) -> str | bool:
     url = f"https://api.hackertarget.com/aslookup/?q={ip}&output=json"
     # url = f"https://api.ipinfo.io/lite/{ip}" probably blocks vpns
@@ -397,9 +430,12 @@ def loadData():
     except json.JSONDecodeError:
         logger.warning("Session data file is corrupt or invalid, starting fresh")
     except PermissionError:
-        logger.critical("Permission error when reading session data file")
-        logger.critical("EXITING SCRIPT")
-        sys.exit(1)
+        close_script(
+            "Permission error when reading session data file",
+            1,
+            "permission error",
+            "Script closed due to error when reading session data from file.",
+        )
     if env_write_current_mamid:
         try:
             logger.debug("Creating/blanking current_mamid file")
@@ -438,9 +474,7 @@ def interruptable_sleep(sleeptime: float) -> None:
     try:
         time.sleep(sleeptime)
     except SleepInterruptException:
-        logger.info("Received close signal")
-        logger.info("EXITING SCRIPT")
-        sys.exit(0)
+        close_script("Received close signal", 0)
 
 
 def returnIP(return_current: bool = False) -> None | str:
@@ -503,10 +537,8 @@ def parseMAMID() -> dict[str, str | None]:
     logger.debug("Parsing env mamids")
     env = os.getenv("MAM_ID")
     if not env:
-        logger.critical("No mam_ids assigned to environment variable")
-        logger.critical("EXITING SCRIPT")
-        sys.exit(1)
-    entries = env.split(",")
+        close_script("No mam_ids assigned to environment variable", 1)
+    entries = env.split(",")  # type: ignore
     parsed_mamids: dict[str, str | None] = {}
     for entry in entries:
         parts = entry.strip().split("@")
@@ -520,9 +552,7 @@ def parseMAMID() -> dict[str, str | None]:
             continue
         parsed_mamids[mam_id] = original_ip
     if len(parsed_mamids) == 0:
-        logger.critical("Parsing mam_id environment variable returned no mam_ids")
-        logger.critical("EXITING SCRIPT")
-        sys.exit(1)
+        close_script("Parsing mam_id environment variable returned no mam_ids", 1)
     if len(parsed_mamids) == 1:
         for _mam_id, original_ip in parsed_mamids.items():
             if not original_ip:
@@ -561,6 +591,7 @@ def syncSessions():
 
 env_debug = boolify_string(os.getenv("DEBUG"))
 env_write_current_mamid = boolify_string(os.getenv("WRITE_CURRENT_MAMID"))
+env_notify_urls = os.getenv("NOTIFY_URLS")
 write_current_mamid_path = Path("/data/current_mamid")
 sessions: dict[str, Session] = {}
 json_path = Path("/data/mamapi_multisession.json")
@@ -604,12 +635,14 @@ try:
                         )
         state.first_run = False
         if not session_sets.valids:
-            logger.critical(
+            close_script(
                 "No available valid sessions - "
-                "wipe all of your env mam_ids and start fresh"
+                "wipe all of your env mam_ids and start fresh",
+                1,
+                "no valid sessions",
+                "All sessions listed in MAM_ID "
+                "environment variable are marked as invalid.",
             )
-            logger.critical("EXITING SCRIPT")
-            sys.exit(1)
         if state.ratelimited and state.last_update_time:
             logger.info(
                 f"Last successful IP update was at "
@@ -628,12 +661,11 @@ try:
             continue
         if state.dumb_mode:
             if len(sessions) != 1:
-                logger.critical(
+                close_script(
                     "ERROR: entered dumb_mode with more than one session. "
-                    "Please report this error"
+                    "Please report this error",
+                    1,
                 )
-                logger.critical("EXITING SCRIPT")
-                sys.exit(1)
             for session in sessions.values():
                 logger.debug("Sending dumb session...")
                 session.send_session()
@@ -661,6 +693,11 @@ try:
             session_sets.asns[state.asn].send_session()
             continue
         if not state.no_current_options:
+            notify(
+                "no session to match current ASN",
+                f"There are no available mam_ids that match the current IP/ASN. "
+                f"There is no active session. Current IP: {state.ip}",
+            )
             logger.warning(
                 "No sessions matching the current IP or ASN exist, will recheck "
                 "every 5 minutes in case the IP changes to a matching IP/ASN"
@@ -675,10 +712,6 @@ try:
         state.no_current_options = True
         interruptable_sleep(300)
 except SleepInterruptException:
-    logger.info("Received close signal")
-    logger.info("EXITING SCRIPT")
-    sys.exit(0)
+    close_script("Received close signal", 0)
 except Exception as e:
-    logger.critical(f"Caught exception: {e}")
-    logger.critical("EXITING SCRIPT")
-    sys.exit(1)
+    close_script(f"Caught exception: {e}", 1)

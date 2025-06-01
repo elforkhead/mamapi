@@ -13,4 +13,5 @@ services:
       DEBUG: ${DEBUG}
       TZ: ${TZ}
       WRITE_CURRENT_MAMID: ${WRITE_CURRENT_MAMID}
+      NOTIFY_URLS: ${NOTIFY_URLS}
     network_mode: "container:gluetun"

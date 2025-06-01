@@ -36,9 +36,11 @@ services:
 ```
 
 If you are not applying the env variable directly in the compose file (such as through a .env), you can provide it as a single string without linebreaks:
+
 ```
 "firstmamidhereoneline@1.1.1.1, secondmamidhereoneline@2.2.2.2, thirdmamidhereoneline@3.3.3.3"
 ```
+
 ---
 ## Compose networking examples with gluetun
 Run behind a gluetun service in the same compose as mamapi
@@ -69,4 +71,23 @@ Write the mam_id in use to a "current_mamid" file in the data directory
 
 ```yaml
 WRITE_CURRENT_MAMID: True
+```
+
+Error notifications.
+[Provide a comma separated list of apprise service URLs](https://github.com/caronc/apprise). Notifications will be sent only in error states that occur after initial setup (no notifications for problems you'd find on your first run). This includes things like session invalidations and lacking an appropriate mam_id for the current session.
+
+```yaml
+services:
+  mamapi:
+    environment:
+      NOTIFY_URLS: >
+        firsturlhere,
+        secondurlhere,
+        thirdurlhere
+```
+
+One line apprise URL format:
+
+```
+NOTIFY_URLS="firsturlhere, secondurlhere, thirdurlhere"
 ```
