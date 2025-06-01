@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import signal
 import sys
 import time
 from datetime import UTC, datetime, timedelta
@@ -21,6 +22,10 @@ stderr_handler.setLevel(logging.WARNING)  # intended to handle WARNING, ERROR, C
 stderr_handler.setFormatter(formatter)
 logger.addHandler(stdout_handler)
 logger.addHandler(stderr_handler)
+
+
+class SleepInterruptException(Exception):
+    pass
 
 
 class SessionInvalidError(Exception):
@@ -77,9 +82,9 @@ class StateSingleton:
         if not latest_ip:
             logger.error("Failed to grab external IP - no internet")
             logger.error("Checking for internet every 5 minutes")
-            time.sleep(300)
+            interruptable_sleep(300)
             while (latest_ip := returnIP()) is None:
-                time.sleep(300)
+                interruptable_sleep(300)
             logger.info(f"Connection restored. External IP: {latest_ip}")
         logger.debug(f"Fetched external IP: {latest_ip}")
         if self.ip != latest_ip:
@@ -178,7 +183,7 @@ class Session:
         try:
             r = contactMAM(self.mam_id)
             self._processResponse(r)
-            time.sleep(300)
+            interruptable_sleep(300)
             return True
         except SessionInvalidError as e:
             logger.critical(f"{e}")
@@ -425,6 +430,19 @@ def saveData():
             env_write_current_mamid = False
 
 
+def signal_handler(signal_number, frame) -> None:
+    raise SleepInterruptException()
+
+
+def interruptable_sleep(sleeptime: float) -> None:
+    try:
+        time.sleep(sleeptime)
+    except SleepInterruptException:
+        logger.info("Received close signal")
+        logger.info("EXITING SCRIPT")
+        sys.exit(0)
+
+
 def returnIP() -> None | str:
     global state
     logger.debug("Attempting to grab external IP...")
@@ -479,10 +497,10 @@ def contactMAM(inputMAMID: str):
             except requests.exceptions.RequestException as err:
                 logger.error(f"Unexpected error during HTTP GET: {err}")
             if attempt < 2:
-                time.sleep(30)
+                interruptable_sleep(30)
         else:
             logger.error("Multiple HTTP GET failures: sleeping for 30 minutes")
-            time.sleep(1800)
+            interruptable_sleep(1800)
 
 
 def parseMAMID() -> dict[str, str | None]:
@@ -554,6 +572,10 @@ json_path = Path("/data/mamapi_multisession.json")
 session_sets = SessionSetsSingleton()
 state = StateSingleton()
 
+
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
+
 try:
     logger.setLevel(logging.INFO)
     logger.info("STARTING SCRIPT")
@@ -599,7 +621,7 @@ try:
                 f"{state.last_update_time.astimezone().strftime('%Y-%m-%d %H:%M')}. "
                 "Sleeping for {round(state.ratelimited / 60)} minutes"
             )
-            time.sleep(state.ratelimited)
+            interruptable_sleep(state.ratelimited)
             continue
         state.refresh()
         if state.ip == state.last_update_ip:
@@ -607,7 +629,7 @@ try:
                 "Current IP identical to last update sent to MAM, "
                 "sleeping for 5 minutes"
             )
-            time.sleep(300)
+            interruptable_sleep(300)
             continue
         if state.dumb_mode:
             if len(sessions) != 1:
@@ -627,7 +649,7 @@ try:
                 "the ASN API may be invalid or ratelimited"
             )
             logger.warning("Retrying in 5 minutes")
-            time.sleep(300)
+            interruptable_sleep(300)
             continue
         if state.ip in session_sets.ips:
             logger.info(
@@ -656,7 +678,7 @@ try:
                 f"match the current IP: '{state.ip}'"
             )
         state.no_current_options = True
-        time.sleep(300)
+        interruptable_sleep(300)
 except Exception as e:
     logger.critical(f"Caught exception: {e}")
     logger.critical("EXITING SCRIPT")
