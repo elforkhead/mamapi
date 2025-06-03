@@ -647,7 +647,7 @@ try:
             logger.info(
                 f"Last successful IP update was at "
                 f"{state.last_update_time.astimezone().strftime('%Y-%m-%d %H:%M')}. "
-                "Sleeping for {round(state.ratelimited / 60)} minutes"
+                f"Sleeping for {round(state.ratelimited / 60)} minutes"
             )
             interruptable_sleep(state.ratelimited)
             continue
