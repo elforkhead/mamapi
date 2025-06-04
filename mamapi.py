@@ -191,9 +191,8 @@ class Session:
             self.invalidate()
             return False
 
-    def _processResponse(self, jsonResponse):
+    def _processResponse(self, jsonResponse) -> None:
         json_response_msg = ""
-        global state
         try:
             json_response_msg = jsonResponse.json().get("msg", "").casefold()
             logger.info(f"Received response: '{json_response_msg}'")
@@ -203,63 +202,84 @@ class Session:
                 f"HTTP response status code received: '{jsonResponse.status_code}'"
             )
             return
-        if json_response_msg == "Completed".casefold():
-            logger.info(f"MAM session IP successfully updated to: {state.ip}")
-            self.last_update_ip = state.ip
-            state.mam_ip_updated(self.mam_id, True)
+        except Exception as e:
+            logger.error(f"Failed to decode JSON: {e}")
             return
-        elif json_response_msg == "No change".casefold():
-            logger.info(
-                f"Successful exchange with MAM, however IP matches "
-                f"current session as {state.ip}"
-            )
+        if jsonResponse.status_code == 200:
             self.last_update_ip = state.ip
+            if json_response_msg:
+                if json_response_msg == "Completed".casefold():
+                    logger.info(f"MAM session IP successfully updated to: {state.ip}")
+                    state.mam_ip_updated(self.mam_id, True)
+                    return
+                state.mam_ip_updated(self.mam_id, False)
+                if json_response_msg == "No change".casefold():
+                    logger.info(
+                        f"Successful exchange with MAM, however IP matches "
+                        f"current session as {state.ip}"
+                    )
+                    return
+                logger.info(
+                    f"Received status code 200 (OK)"
+                    f"with unknown msg: '{json_response_msg}'"
+                )
+                return
+            logger.info("Received status code 200 (ok) without a msg response")
             state.mam_ip_updated(self.mam_id, False)
             return
-        elif jsonResponse.status_code == 429:
+        if jsonResponse.status_code == 429:
             logger.warning(
                 "MAM rejects due to last change too recent, "
                 "and last successful update is unknown: retry in 15 minutes"
             )
             state.last_update_time = timeNow() - timedelta(minutes=46)
             return
-        elif json_response_msg == "":
-            logger.warning("MAM HTTP response did not include a 'msg'")
-            logger.warning(
-                f"HTTP response status code received: '{jsonResponse.status_code}'"
-            )
-            return
-        elif json_response_msg == "Incorrect session type".casefold():
-            logger.critical(
-                "Per MAM: 'The session cookie is not to a locked session, "
-                "or not a session that is allowed the dynamic seedbox setting'"
-            )
-            raise SessionInvalidError("Response: incorrect session type")
-        elif json_response_msg == "Invalid session".casefold():
-            logger.critical(
-                "Per MAM: 'The system deemed the session invalid (bad mam_id value, "
-                "or you've moved off the locked IP/ASN)'"
-            )
-            raise SessionInvalidError("Response: invalid session")
-        elif json_response_msg == "No Session Cookie".casefold():
-            logger.critical(
-                "Per MAM: 'You didn't properly provide the mam_id session cookie.'"
-            )
-            logger.critical("Your mam_id may be formatted incorrectly")
-            raise SessionInvalidError("Response: no session cookie")
-        else:
-            logger.error(f"Received unknown json response message: {json_response_msg}")
-            return
+        if jsonResponse.status_code == 403:
+            if json_response_msg == "No Session Cookie".casefold():
+                logger.error("mam_id is not formatted correctly")
+                raise SessionInvalidError("no session cookie")
+            if json_response_msg == "Invalid session - IP mismatch".casefold():
+                logger.error(
+                    "Session invalidated due to IP "
+                    "mismatch - make sure ASN lock is enabled"
+                )
+                raise SessionInvalidError("invalid session - IP mismatch")
+            if json_response_msg == "Invalid session - ASN mismatch".casefold():
+                logger.error("Session invalidated due to ASN mismatch")
+                raise SessionInvalidError("invalid session - ASN mismatch")
+            if json_response_msg == "Incorrect session type - Other".casefold():
+                logger.error("Session declared of incorrect type for unknown reason")
+                raise SessionInvalidError("incorrect session type - other")
+            if (
+                json_response_msg
+                == "Incorrect session type - not allowed this function".casefold()
+            ):
+                logger.error("Session is not allowed to use dynamic seedbox API")
+                raise SessionInvalidError(
+                    "incorrect session type - not allowed this function"
+                )
+            if (
+                json_response_msg
+                == "Incorrect session type - non-API session".casefold()
+            ):
+                logger.error("Session does not have dynamic seedbox API enabled")
+                raise SessionInvalidError("incorrect session type - non-API session")
+            logger.error("Session was declared invalid for unknown reason")
+            if json_response_msg:
+                logger.error(f"Received unknown msg from MAM: '{json_response_msg}'")
+            raise SessionInvalidError("unknown")
+        logger.error("Could not process MAM's response")
+        return
 
     def invalidate(self):
         notify(
             "invalidated session",
             "One of your sessions was invalidated. See the log for details.",
         )
-        logger.critical("INVALID SESSION:")
-        logger.critical(f"mam_id: {self.mam_id}")
-        logger.critical(f"original IP: {self.original_session_ip}")
-        logger.critical(f"last update IP: {self.last_update_ip}")
+        logger.error("INVALID SESSION:")
+        logger.error(f"mam_id: {self.mam_id}")
+        logger.error(f"original IP: {self.original_session_ip}")
+        logger.error(f"last update IP: {self.last_update_ip}")
         self.invalid = True
         saveData()
 
