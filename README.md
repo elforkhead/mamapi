@@ -57,25 +57,36 @@ Or run behind a gluetun container that was not started in the same compose as ma
 
 ## Optional/advanced environment variables
 
-Debug-level logging. Not recommended for general use.
+**Debug-level logging.**
+
+Not recommended for general use.
 
 ```yaml
 DEBUG: True
 ```
 
-Write the mam_id in use to a "current_mamid" file in the data directory
+---
+
+**Write the mam_id in use to a "current_mamid" file in the data directory.**
 
 ```yaml
 WRITE_CURRENT_MAMID: True
 ```
 
-Exit the container when internet connection is lost. Use in conjunction with a docker restart policy of 'unless-stopped' to force a container restart if network connection is lost. Useful if you lose connection when your VPN container restarts.
+---
+
+**Exit the container when its internet connection is lost.**
+
+Use in conjunction with a docker restart policy of 'unless-stopped' to force a container restart if network connection is lost. Useful if you lose connection when your VPN container restarts.
 
 ```yaml
 SHUTDOWN_ON_DISCONNECT: True
 ```
 
-Error notifications.
+---
+
+**Error notifications through apprise.**
+
 [Provide a comma separated list of apprise service URLs](https://github.com/caronc/apprise). Notifications will be sent only in error states that occur after initial setup (no notifications for problems you'd find on your first run). This includes things like session invalidations and lacking an appropriate mam_id for the current session.
 
 ```yaml
