@@ -82,6 +82,8 @@ class StateSingleton:
         latest_ip = returnIP()
         if not latest_ip:
             logger.error("Failed to grab external IP - no internet")
+            if env_shutdown_on_disconnect:
+                close_script("SHUTDOWN_ON_DISCONNECT is truthy", 0)
             logger.error("Checking for internet every 5 minutes")
             interruptable_sleep(300)
             while (latest_ip := returnIP()) is None:
@@ -527,7 +529,7 @@ def returnIP(return_current: bool = False) -> None | str:
         return None
 
 
-def contactMAM(inputMAMID: str):
+def contactMAM(inputMAMID: str) -> None | requests.Response:
     while True:
         for attempt in range(3):
             try:
@@ -612,6 +614,7 @@ def syncSessions():
 env_debug = boolify_string(os.getenv("DEBUG"))
 env_write_current_mamid = boolify_string(os.getenv("WRITE_CURRENT_MAMID"))
 env_notify_urls = os.getenv("NOTIFY_URLS")
+env_shutdown_on_disconnect = boolify_string(os.getenv("SHUTDOWN_ON_DISCONNECT"))
 write_current_mamid_path = Path("/data/current_mamid")
 sessions: dict[str, Session] = {}
 json_path = Path("/data/mamapi_multisession.json")

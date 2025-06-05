@@ -33,12 +33,8 @@ services:
         @2.2.2.2,
         thirdmamidhereoneline
         @3.3.3.3
-```
-
-If you are not applying the env variable directly in the compose file (such as through a .env), you can provide it as a single string without linebreaks:
-
-```
-"firstmamidhereoneline@1.1.1.1, secondmamidhereoneline@2.2.2.2, thirdmamidhereoneline@3.3.3.3"
+      # OR ONE LINE FORMAT, USEFUL IF YOUR ARE NOT WRITING DIRECTLY IN YAML
+      MAM_ID: "firstmamidhereoneline@1.1.1.1, secondmamidhereoneline@2.2.2.2, thirdmamidhereoneline@3.3.3.3"
 ```
 
 ---
@@ -73,6 +69,12 @@ Write the mam_id in use to a "current_mamid" file in the data directory
 WRITE_CURRENT_MAMID: True
 ```
 
+Exit the container when internet connection is lost. Use in conjunction with a docker restart policy of 'unless-stopped' to force a container restart if network connection is lost. Useful if you lose connection when your VPN container restarts.
+
+```yaml
+SHUTDOWN_ON_DISCONNECT: True
+```
+
 Error notifications.
 [Provide a comma separated list of apprise service URLs](https://github.com/caronc/apprise). Notifications will be sent only in error states that occur after initial setup (no notifications for problems you'd find on your first run). This includes things like session invalidations and lacking an appropriate mam_id for the current session.
 
@@ -84,10 +86,6 @@ services:
         firsturlhere,
         secondurlhere,
         thirdurlhere
-```
-
-One line apprise URL format:
-
-```
-NOTIFY_URLS="firsturlhere, secondurlhere, thirdurlhere"
+      # OR ONE LINE FORMAT, USEFUL IF YOUR ARE NOT WRITING DIRECTLY IN YAML
+      NOTIFY_URLS: "firsturlhere, secondurlhere, thirdurlhere"
 ```

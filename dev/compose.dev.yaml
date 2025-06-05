@@ -14,4 +14,6 @@ services:
       TZ: ${TZ}
       WRITE_CURRENT_MAMID: ${WRITE_CURRENT_MAMID}
       NOTIFY_URLS: ${NOTIFY_URLS}
+      SHUTDOWN_ON_DISCONNECT: ${SHUTDOWN_ON_DISCONNECT}
     network_mode: "container:gluetun"
+    restart: unless-stopped
