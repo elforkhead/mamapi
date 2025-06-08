@@ -1,14 +1,19 @@
+from __future__ import annotations
+
 import json
 import logging
 import os
 import signal
 import sys
 import time
+from collections.abc import MutableMapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import FrameType
+from typing import Any, Self
 
 import apprise
-import requests  # type: ignore
+import requests
 
 logger = logging.getLogger(__name__)
 formatter = logging.Formatter(
@@ -32,7 +37,7 @@ class SleepInterruptException(Exception):
 class SessionInvalidError(Exception):
     """Exception raised when mam session is declared invalid"""
 
-    def __init__(self, reason):
+    def __init__(self, reason: str) -> None:
         self.reason = reason
         super().__init__(f"MAM session invalidated: {self.reason}")
 
@@ -40,26 +45,26 @@ class SessionInvalidError(Exception):
 class StateSingleton:
     _instance = None
 
-    def __new__(cls):
+    def __new__(cls) -> Self:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
 
-    def __init__(self):
+    def __init__(self) -> None:
         # Avoid reinitialization if already constructed
         if not hasattr(self, "_initialized"):
-            self.last_update_ip = None
-            self.last_update_asn = None
-            self.last_update_mamid = None
-            self.last_update_time = None
-            self.ip = None
-            self.asn = None
-            self.no_current_options = False
-            self.dumb_mode = False
-            self.first_run = True
-            self._initialized = True
+            self.last_update_ip: str | None = None
+            self.last_update_asn: str | None = None
+            self.last_update_mamid: str | None = None
+            self.last_update_time: datetime | None = None
+            self.ip: str | None = None
+            self.asn: str | None = None
+            self.no_current_options: bool = False
+            self.dumb_mode: bool = False
+            self.first_run: bool = True
+            self._initialized: bool = True
 
-    def to_dict(self):
+    def to_dict(self) -> MutableMapping[str, Any]:
         return {
             "last_update_ip": self.last_update_ip,
             "last_update_asn": self.last_update_asn,
@@ -67,7 +72,7 @@ class StateSingleton:
             "last_update_time": self.last_update_time,
         }
 
-    def load(self, data: dict):
+    def load(self, data: MutableMapping[str, Any]) -> None:
         self.last_update_ip = data.get("last_update_ip")
         self.last_update_asn = data.get("last_update_asn")
         self.last_update_mamid = data.get("last_update_mamid")
@@ -78,7 +83,7 @@ class StateSingleton:
             )
             self.last_update_time = provided_last_update_time
 
-    def refresh(self):
+    def refresh(self) -> None:
         latest_ip = returnIP()
         if not latest_ip:
             logger.error("Failed to grab external IP - no internet")
@@ -101,7 +106,7 @@ class StateSingleton:
                 if self.asn:
                     logger.info(f"Current ASN: {self.asn}")
 
-    def mam_ip_updated(self, mamid: str, update_time: bool):
+    def mam_ip_updated(self, mamid: str, update_time: bool) -> None:
         global state
         self.last_update_ip = self.ip
         self.last_update_mamid = mamid
@@ -126,20 +131,20 @@ class StateSingleton:
 class Session:
     def __init__(
         self,
-        mam_id,
-        original_session_ip=None,
-        ASN=None,
-        last_update_ip=None,
-        invalid=False,
-    ):
-        self.mam_id = mam_id
-        self.original_session_ip = original_session_ip
-        self._ASN = ASN
-        self.last_update_ip = last_update_ip
-        self.invalid = invalid
+        mam_id: str,
+        original_session_ip: str | None = None,
+        ASN: str | None = None,
+        last_update_ip: str | None = None,
+        invalid: bool = False,
+    ) -> None:
+        self.mam_id: str = mam_id
+        self.original_session_ip: str | None = original_session_ip
+        self._ASN: str | None = ASN
+        self.last_update_ip: str | None = last_update_ip
+        self.invalid: bool = invalid
 
     @classmethod
-    def from_dict(cls, data):
+    def from_dict(cls, data: MutableMapping[str, Any]) -> Self:
         return cls(
             mam_id=data["mam_id"],
             original_session_ip=data["original_session_ip"],
@@ -148,7 +153,7 @@ class Session:
             invalid=data["invalid"],
         )
 
-    def to_dict(self):
+    def to_dict(self) -> MutableMapping[str, Any]:
         return {
             "mam_id": self.mam_id,
             "original_session_ip": self.original_session_ip,
@@ -158,7 +163,7 @@ class Session:
         }
 
     @property
-    def ASN(self):
+    def ASN(self) -> str | None:
         global state
         ip = None
         if state.dumb_mode:
@@ -178,22 +183,25 @@ class Session:
                 saveData()
                 return output
             return None
+        return None
 
-    def send_session(self):
+    def send_session(self) -> bool:
         global state
         state.no_current_options = False
         r = None
         try:
             r = contactMAM(self.mam_id)
-            self._processResponse(r)
-            interruptable_sleep(300)
-            return True
+            if r:
+                self._processResponse(r)
+                interruptable_sleep(300)
+                return True
+            return False
         except SessionInvalidError as e:
             logger.critical(f"{e}")
             self.invalidate()
             return False
 
-    def _processResponse(self, jsonResponse) -> None:
+    def _processResponse(self, jsonResponse: requests.Response) -> None:
         json_response_msg = ""
         try:
             json_response_msg = jsonResponse.json().get("msg", "").casefold()
@@ -273,7 +281,7 @@ class Session:
         logger.error("Could not process MAM's response")
         return
 
-    def invalidate(self):
+    def invalidate(self) -> None:
         notify(
             "invalidated session",
             "One of your sessions was invalidated. See the log for details.",
@@ -289,12 +297,12 @@ class Session:
 class SessionSetsSingleton:
     _instance = None
 
-    def __new__(cls):
+    def __new__(cls) -> Self:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
 
-    def __init__(self):
+    def __init__(self) -> None:
         # Avoid reinitialization if already constructed
         if not hasattr(self, "_initialized"):
             self._initialized = True
@@ -318,11 +326,11 @@ class SessionSetsSingleton:
         return invalids
 
     @property
-    def ips(self) -> dict[str, Session]:
+    def ips(self) -> MutableMapping[str, Session]:
         # will use original session ip if there is no last update
         # returns a dict with key as ip and value as session
         global sessions
-        ips: dict[str, Session] = {}
+        ips: MutableMapping[str, Session] = {}
         for _mam_id, session in sessions.items():
             if session.invalid:
                 continue
@@ -349,9 +357,9 @@ class SessionSetsSingleton:
         return ips
 
     @property
-    def asns(self) -> dict[str, Session]:
+    def asns(self) -> MutableMapping[str, Session]:
         global sessions
-        asns: dict[str, Session] = {}
+        asns: MutableMapping[str, Session] = {}
         for _mam_id, session in sessions.items():
             if session.invalid:
                 continue
@@ -368,7 +376,7 @@ class SessionSetsSingleton:
 
 
 class TimeEnabledJSONEncoder(json.JSONEncoder):
-    def default(self, o):
+    def default(self, o: Any) -> Any:
         if isinstance(o, datetime):
             obj = o.timestamp()
             return obj
@@ -403,7 +411,7 @@ def close_script(
         sys.exit(1)
 
 
-def lookup_asn(ip) -> str | bool:
+def lookup_asn(ip: str) -> str | None:
     url = f"https://api.hackertarget.com/aslookup/?q={ip}&output=json"
     # url = f"https://api.ipinfo.io/lite/{ip}" probably blocks vpns
     try:
@@ -413,15 +421,15 @@ def lookup_asn(ip) -> str | bool:
         data = response.json()
         logger.debug(f"ASN lookup response: {data.get('asn', '')}")
         asn = data.get("asn", "")
-        return asn if asn else False
+        return asn if asn else None
     except requests.RequestException as e:
         logger.error(
             f"Error fetching ASN: {e}"
         )  # will need more elaborate error processing for poorly formatted ips and such
-        return False
+        return None
 
 
-def timeNow():
+def timeNow() -> datetime:
     return datetime.now(UTC)
 
 
@@ -436,7 +444,7 @@ def boolify_string(value: str | None) -> str | bool | None:
     return value
 
 
-def loadData():
+def loadData() -> None:
     global sessions, state, env_write_current_mamid
     logger.debug("Loading data from json")
     sessions.clear()
@@ -469,7 +477,7 @@ def loadData():
             env_write_current_mamid = False
 
 
-def saveData():
+def saveData() -> None:
     global sessions, state, env_write_current_mamid
     saveDict = {
         "state": state.to_dict(),
@@ -488,7 +496,7 @@ def saveData():
             env_write_current_mamid = False
 
 
-def signal_handler(signal_number, frame) -> None:
+def signal_handler(signal_number: int, frame: FrameType | None) -> None:
     raise SleepInterruptException()
 
 
@@ -516,7 +524,7 @@ def returnIP(return_current: bool = False) -> None | str:
         logger.error(f"Unexpected error during HTTP GET: {err}")
         return None
     if r.status_code == 200:
-        json_response_ip = r.json().get("ip", "")
+        json_response_ip: str = r.json().get("ip", "")
         if return_current:
             logger.info(f"Current IP: {json_response_ip}")
         return json_response_ip
@@ -554,14 +562,14 @@ def contactMAM(inputMAMID: str) -> None | requests.Response:
             interruptable_sleep(1800)
 
 
-def parseMAMID() -> dict[str, str | None]:
+def parseMAMID() -> MutableMapping[str, str | None]:
     global state
     logger.debug("Parsing env mamids")
     env = os.getenv("MAM_ID")
     if not env:
         close_script("No mam_ids assigned to environment variable", 1)
     entries = env.split(",")  # type: ignore
-    parsed_mamids: dict[str, str | None] = {}
+    parsed_mamids: MutableMapping[str, str | None] = {}
     for entry in entries:
         parts = entry.strip().split("@")
         mam_id = parts[0].strip()
@@ -591,7 +599,7 @@ def parseMAMID() -> dict[str, str | None]:
     return parsed_mamids
 
 
-def syncSessions():
+def syncSessions() -> None:
     global sessions
     parsed_mamids = parseMAMID()
     logger.debug("Syncing env mam_ids with loaded sessions")
@@ -616,11 +624,10 @@ env_write_current_mamid = boolify_string(os.getenv("WRITE_CURRENT_MAMID"))
 env_notify_urls = os.getenv("NOTIFY_URLS")
 env_shutdown_on_disconnect = boolify_string(os.getenv("SHUTDOWN_ON_DISCONNECT"))
 write_current_mamid_path = Path("/data/current_mamid")
-sessions: dict[str, Session] = {}
+sessions: MutableMapping[str, Session] = {}
 json_path = Path("/data/mamapi_multisession.json")
 session_sets = SessionSetsSingleton()
 state = StateSingleton()
-
 
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
@@ -668,7 +675,7 @@ try:
             )
         if state.ratelimited and state.last_update_time:
             logger.info(
-                f"Last successful IP update was at "
+                "Last successful IP update was at "
                 f"{state.last_update_time.astimezone().strftime('%Y-%m-%d %H:%M')}. "
                 f"Sleeping for {round(state.ratelimited / 60)} minutes"
             )
@@ -701,7 +708,7 @@ try:
             logger.warning("Retrying in 5 minutes")
             interruptable_sleep(300)
             continue
-        if state.ip in session_sets.ips:
+        if state.ip and state.ip in session_sets.ips:
             logger.info(
                 "Current IP is associated with a mam_id. "
                 "Sending update with matching mam_id..."
@@ -718,7 +725,7 @@ try:
         if not state.no_current_options:
             notify(
                 "no session to match current ASN",
-                f"There are no available mam_ids that match the current IP/ASN. "
+                "There are no available mam_ids that match the current IP/ASN. "
                 f"There is no active session. Current IP: {state.ip}",
             )
             logger.warning(
@@ -729,7 +736,7 @@ try:
                 "This can occur if the script fails to fetch ASNs for your mam_ids"
             )
             logger.warning(
-                f"Consider making an additional session to "
+                "Consider making an additional session to "
                 f"match the current IP: '{state.ip}'"
             )
         state.no_current_options = True
