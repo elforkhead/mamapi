@@ -4,32 +4,19 @@
 
 **If you're using a VPN, choose a single city/region as your endpoint.** Different regions will be in a different ASN, and MAM requires a unique session for each ASN.
 
-## General docker compose format
+## ASN awareness/multisession support
+Provide the IP used to create your mam_id to enable ASN awareness. The script will only use a session that matches your current ASN to avoid session invalidations. You can provide more than one mam_id/IP combo to cover multiple ASNs, and the script will select the one that matches your current ASN. You can provide a single mam_id without an IP to disable all ASN-aware features.
+
+## Docker compose:
 ```yaml
 services:
   mamapi:
     image: elforkhead/mamapi:latest
-    container_name: mamapi
-    restart: unless-stopped
+    # also available at ghcr.io/elforkhead/mamapi:latest
     volumes:
       - ./mamapi/data:/data
     environment:
-      MAM_ID: yourmamapiinfohere
-      TZ: Etc/UTC #https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
-```
-Also available from GHCR:
-```yaml
-    image: ghcr.io/elforkhead/mamapi:latest
-```
----
-## ASN awareness/multisession support
-Provide the IP used to create your mam_id to enable ASN awareness. The script will only use a session that matches your current ASN to avoid session invalidations. You can provide more than one mam_id/IP combo to cover multiple ASNs, and the script will select the one that matches your current ASN.
-
-ASN aware/multisession MAM_ID compose format:
-```yaml
-services:
-  mamapi:
-    environment:
+      # mam_id@ip.used.to.create
       MAM_ID: >
         firstmamidhereoneline
         @1.1.1.1,
@@ -38,7 +25,8 @@ services:
         thirdmamidhereoneline
         @3.3.3.3
       # OR ONE LINE FORMAT, USEFUL IF YOUR ARE NOT WRITING DIRECTLY IN YAML
-      MAM_ID: "firstmamidhereoneline@1.1.1.1, secondmamidhereoneline@2.2.2.2, thirdmamidhereoneline@3.3.3.3"
+      # MAM_ID: "firstmamidhereoneline@1.1.1.1, secondmamidhereoneline@2.2.2.2, thirdmamidhereoneline@3.3.3.3"
+      TZ: America/New_York #https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
 ```
 
 ---
