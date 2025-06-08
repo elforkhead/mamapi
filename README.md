@@ -16,6 +16,9 @@ services:
     volumes:
       - ./mamapi/data:/data
     environment:
+
+      TZ: America/New_York #https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
+
       # mam_id@ip.used.to.create
       MAM_ID: >
         firstmamidhereoneline
@@ -24,9 +27,9 @@ services:
         @2.2.2.2,
         thirdmamidhereoneline
         @3.3.3.3
+
       # OR ONE LINE FORMAT, USEFUL IF YOUR ARE NOT WRITING DIRECTLY IN YAML
       # MAM_ID: "firstmamidhereoneline@1.1.1.1, secondmamidhereoneline@2.2.2.2, thirdmamidhereoneline@3.3.3.3"
-      TZ: America/New_York #https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
 ```
 
 ---
