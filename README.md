@@ -95,3 +95,18 @@ services:
       # OR ONE LINE FORMAT, USEFUL IF YOUR ARE NOT WRITING DIRECTLY IN YAML
       NOTIFY_URLS: "firsturlhere, secondurlhere, thirdurlhere"
 ```
+
+---
+
+### Update Prowlarr when mam_id changes
+
+Add all 3 environment variables:
+
+```yaml
+services:
+  mamapi:
+    environment:
+      UPDATE_PROWLARR: true
+      PROWLARR_URL: http://192.168.0.2:9696
+      PROWLARR_API: 123456789
+```
