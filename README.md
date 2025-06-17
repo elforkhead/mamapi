@@ -85,28 +85,23 @@ SHUTDOWN_ON_DISCONNECT: True
 [Provide a comma separated list of apprise service URLs](https://github.com/caronc/apprise). Notifications will be sent only in error states that occur after initial setup (no notifications for problems you'd find on your first run). This includes things like session invalidations and lacking an appropriate mam_id for the current session.
 
 ```yaml
-services:
-  mamapi:
-    environment:
-      NOTIFY_URLS: >
-        firsturlhere,
-        secondurlhere,
-        thirdurlhere
-      # OR ONE LINE FORMAT, USEFUL IF YOUR ARE NOT WRITING DIRECTLY IN YAML
-      NOTIFY_URLS: "firsturlhere, secondurlhere, thirdurlhere"
+NOTIFY_URLS: >
+  firsturlhere,
+  secondurlhere,
+  thirdurlhere
+# OR ONE LINE FORMAT, USEFUL IF YOUR ARE NOT WRITING DIRECTLY IN YAML
+NOTIFY_URLS: "firsturlhere, secondurlhere, thirdurlhere"
 ```
 
 ---
 
-### Update Prowlarr when mam_id changes
+~~***Update Prowlarr with the current session's mam_id***~~
+Work in progress - may be scrapped with new multiasn changes
 
-Add all 3 environment variables:
+The URL is the same one used to access the web interface. Make sure you specify whether your connection is secure or not (http:// vs https://). Include the port (:9696). Localhost is a safe bet if mamapi and Prowlarr are sharing a container network.
+Your API key can be found in Prowlarr -> Settings -> General
 
 ```yaml
-services:
-  mamapi:
-    environment:
-      UPDATE_PROWLARR: true
-      PROWLARR_URL: http://192.168.0.2:9696
-      PROWLARR_API: 123456789
+PROWLARR_URL: http://localhost:9696
+PROWLARR_API_KEY: d1c82c4e4b8543ba4d75ba94ebe83ace
 ```

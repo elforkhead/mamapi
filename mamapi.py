@@ -13,8 +13,8 @@ from types import FrameType
 from typing import Any, Self
 from urllib.parse import urlparse, urlunparse
 
-import apprise
-import requests
+import apprise # type: ignore
+import requests  # type: ignore
 
 logger = logging.getLogger(__name__)
 formatter = logging.Formatter(
@@ -478,47 +478,38 @@ def saveData() -> None:
             logger.warning(f"Caught exception when writing current_mamid: {e}")
             logger.warning("Disabling current_mamid writing")
             env_write_current_mamid = False
-    prowlarr = os.getenv("UPDATE_PROWLARR")
-    if prowlarr:
-        update_prowlarr(state.last_update_mamid)
+    # if env_prowlarr_api_key and env_prowlarr_url and state.last_update_mamid:
+    #     update_prowlarr(state.last_update_mamid)
 
 
-def _normalize_url(url: str) -> str | None:
+def normalize_url(url: str | None) -> str | None:
+    if not url:
+        return None
     if not url.startswith(("http://", "https://")):
         url = "http://" + url
-
     parsed = urlparse(url)
-
     if not parsed.hostname:
         logger.error(f"Invalid URL: '{url}'")
         return None
-
     if parsed.port and not (1 <= parsed.port <= 65535):
         logger.error("Invalid port in URL: '%s'", url)
         return None
-
     return urlunparse(parsed._replace(scheme=parsed.scheme.lower()))
 
 
 def update_prowlarr(new_mam_id: str) -> None:
-    prowlarr_api = os.getenv("PROWLARR_API")
-    prowlarr_url = os.getenv("PROWLARR_URL")
-    if not prowlarr_api:
-        logger.error("Cannot update Prowlarr. PROWLARR_API not set")
-        return
-    if not prowlarr_url:
-        logger.error("Cannot update Prowlarr. PROWLARR_URL not set")
-        return
-    prowlarr_url = _normalize_url(prowlarr_url)
-    if prowlarr_url is None:
-        return
-    prowlarr_indexer_url = f"{prowlarr_url}/api/v1/indexer?apikey={prowlarr_api}"
-    logger.debug(f"Prowlarr Indexer URL: {prowlarr_indexer_url}")
-    mam_config = _get_prowlarr_mam_config(prowlarr_indexer_url)
+    prowlarr_indexer_url = (
+        f"{env_prowlarr_url}/api/v1/indexer?apikey={env_prowlarr_api_key}"
+    )
+    logger.debug(f"Prowlarr indexer URL: {prowlarr_indexer_url}")
+    mam_config = get_prowlarr_mam_config(prowlarr_indexer_url)
     if mam_config is None:
+        logger.error("No MAM config found in Prowlarr")
         return
     mam_indexer_id = mam_config.get("id")
-    prowlarr_mam_url = f"{prowlarr_url}/api/v1/indexer/{mam_indexer_id}?apikey={prowlarr_api}"
+    prowlarr_mam_url = (
+        f"{env_prowlarr_url}/api/v1/indexer/{mam_indexer_id}?apikey={env_prowlarr_api_key}"
+    )
     logger.debug(f"Prowlarr MAM URL: {prowlarr_mam_url}")
     mam_config = _update_prowlarr_mam_id(mam_config, new_mam_id)
     if mam_config is None:
@@ -526,11 +517,11 @@ def update_prowlarr(new_mam_id: str) -> None:
     _write_updated_prowlarr_config(prowlarr_mam_url, mam_config)
 
 
-def _get_prowlarr_mam_config(url: str) -> None | MutableMapping[str, Any]:
+def get_prowlarr_mam_config(url: str) -> None | MutableMapping[str, Any]:
     try:
         response = requests.get(url)
     except requests.exceptions.ConnectionError:
-        logger.error("Cannot connect to Prowlarr to get indexers")
+        logger.error("Cannot connect to Prowlarr")
         return None
     except requests.exceptions.Timeout:
         logger.error("Request timed out getting Prowlarr indexers")
@@ -541,8 +532,11 @@ def _get_prowlarr_mam_config(url: str) -> None | MutableMapping[str, Any]:
             f"{e.__class__.__qualname__}: {e}"
         )
         return None
+    except Exception as e:
+        logger.error(f"Unknown error when contacting Prowlarr: {e}")
+        return None
     if response.status_code != 200:
-        logger.error(f"Prowlarr get indexers failed with status {response.status_code}")
+        logger.error(f"Getting Prowlarr indexers failed with HTTP status {response.status_code}")
         return None
     try:
         indexers = response.json()
@@ -552,21 +546,14 @@ def _get_prowlarr_mam_config(url: str) -> None | MutableMapping[str, Any]:
     if not isinstance(indexers, list):
         logger.error("Prowlarr indexer response is not a list")
         return None
-    mam_indexer_id = None
-    mam_config = None
     for indexer in indexers:
         if not isinstance(indexer, MutableMapping):
             continue
-        idx_name = indexer.get("definitionName")
         idx_id = indexer.get("id")
-        if idx_name == "MyAnonamouse":
-            mam_indexer_id = idx_id
-            mam_config = indexer
-    if mam_config is None:
-        logger.error("Cannot find MAM Config in Prowlarr")
-        return None
-    logger.debug(f"MAM Config found at Prowlarr index: {mam_indexer_id}")
-    return mam_config
+        if indexer.get("definitionName") == "MyAnonamouse":
+            logger.debug(f"MAM config found at Prowlarr index: {idx_id}")
+            return indexer
+    return None
 
 
 def _update_prowlarr_mam_id(
@@ -737,6 +724,8 @@ env_debug = boolify_string(os.getenv("DEBUG"))
 env_write_current_mamid = boolify_string(os.getenv("WRITE_CURRENT_MAMID"))
 env_notify_urls = os.getenv("NOTIFY_URLS")
 env_shutdown_on_disconnect = boolify_string(os.getenv("SHUTDOWN_ON_DISCONNECT"))
+env_prowlarr_api_key = os.getenv("PROWLARR_API_KEY")
+env_prowlarr_url = normalize_url(os.getenv("PROWLARR_URL"))
 write_current_mamid_path = Path("/data/current_mamid")
 sessions: MutableMapping[str, Session] = {}
 json_path = Path("/data/mamapi_multisession.json")
@@ -751,6 +740,10 @@ try:
     logger.info("STARTING SCRIPT")
     logger.info("https://github.com/elforkhead/mamapi")
     logger.info("v2.0 - now with support for multiple mam_ids and ASNs")
+    if env_prowlarr_api_key and (not env_prowlarr_url):
+        logger.warning("Received PROWLARR_API_KEY without PROWLARR_URL, not updating Prowlarr")
+    if env_prowlarr_url and (not env_prowlarr_api_key):
+        logger.warning("Received PROWLARR_URL without PROWLARR_API_KEY, not updating Prowlarr")
     logger.info("Checking for IP changes every 5 minutes")
     returnIP(True)
     if env_debug:
@@ -770,11 +763,11 @@ try:
     while True:
         if not state.dumb_mode:
             for session in session_sets.valids:
-                if not session.ASN:
-                    if state.first_run:
-                        logger.warning(
-                            f"Could not grab ASN on initialization for session: {session.mam_id}"
-                        )
+                if (not session.ASN) and state.first_run:
+                    logger.warning(
+                        "Could not grab ASN on initialization for "
+                        f"session: {session.mam_id}"
+                    )
         state.first_run = False
         if not session_sets.valids:
             close_script(
