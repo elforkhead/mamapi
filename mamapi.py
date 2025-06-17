@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import FrameType
 from typing import Any, Self
+from urllib.parse import urlparse, urlunparse
 
 import apprise
 import requests
@@ -78,9 +79,7 @@ class StateSingleton:
         self.last_update_mamid = data.get("last_update_mamid")
         provided_last_update_time = data.get("last_update_time")
         if provided_last_update_time:
-            provided_last_update_time = datetime.fromtimestamp(
-                provided_last_update_time, UTC
-            )
+            provided_last_update_time = datetime.fromtimestamp(provided_last_update_time, UTC)
             self.last_update_time = provided_last_update_time
 
     def refresh(self) -> None:
@@ -208,9 +207,7 @@ class Session:
             logger.info(f"Received response: '{json_response_msg}'")
         except ValueError:
             logger.error("API response was not in JSON")
-            logger.error(
-                f"HTTP response status code received: '{jsonResponse.status_code}'"
-            )
+            logger.error(f"HTTP response status code received: '{jsonResponse.status_code}'")
             return
         except Exception as e:
             logger.error(f"Failed to decode JSON: {e}")
@@ -230,8 +227,7 @@ class Session:
                     )
                     return
                 logger.info(
-                    f"Received status code 200 (OK)"
-                    f"with unknown msg: '{json_response_msg}'"
+                    f"Received status code 200 (OK) with unknown msg: '{json_response_msg}'"
                 )
                 return
             logger.info("Received status code 200 (ok) without a msg response")
@@ -250,8 +246,7 @@ class Session:
                 raise SessionInvalidError("no session cookie")
             if json_response_msg == "Invalid session - IP mismatch".casefold():
                 logger.error(
-                    "Session invalidated due to IP "
-                    "mismatch - make sure ASN lock is enabled"
+                    "Session invalidated due to IP mismatch - make sure ASN lock is enabled"
                 )
                 raise SessionInvalidError("invalid session - IP mismatch")
             if json_response_msg == "Invalid session - ASN mismatch".casefold():
@@ -260,18 +255,10 @@ class Session:
             if json_response_msg == "Incorrect session type - Other".casefold():
                 logger.error("Session declared of incorrect type for unknown reason")
                 raise SessionInvalidError("incorrect session type - other")
-            if (
-                json_response_msg
-                == "Incorrect session type - not allowed this function".casefold()
-            ):
+            if json_response_msg == "Incorrect session type - not allowed this function".casefold():
                 logger.error("Session is not allowed to use dynamic seedbox API")
-                raise SessionInvalidError(
-                    "incorrect session type - not allowed this function"
-                )
-            if (
-                json_response_msg
-                == "Incorrect session type - non-API session".casefold()
-            ):
+                raise SessionInvalidError("incorrect session type - not allowed this function")
+            if json_response_msg == "Incorrect session type - non-API session".casefold():
                 logger.error("Session does not have dynamic seedbox API enabled")
                 raise SessionInvalidError("incorrect session type - non-API session")
             logger.error("Session was declared invalid for unknown reason")
@@ -337,8 +324,7 @@ class SessionSetsSingleton:
             if isinstance(session.last_update_ip, str):
                 if session.last_update_ip in ips:
                     logger.warning(
-                        "While building IP list, duplicate was found - "
-                        "invaliding session"
+                        "While building IP list, duplicate was found - invaliding session"
                     )
                     session.invalidate()
                     continue
@@ -347,8 +333,7 @@ class SessionSetsSingleton:
             if isinstance(session.original_session_ip, str):
                 if session.original_session_ip in ips:
                     logger.warning(
-                        "While building IP list, duplicate was found - "
-                        "invaliding session"
+                        "While building IP list, duplicate was found - invaliding session"
                     )
                     session.invalidate()
                     continue
@@ -366,8 +351,7 @@ class SessionSetsSingleton:
             if isinstance(session.ASN, str):
                 if session.ASN in asns:
                     logger.warning(
-                        "While building ASN list, duplicate was found - "
-                        "invaliding session"
+                        "While building ASN list, duplicate was found - invaliding session"
                     )
                     session.invalidate()
                     continue
@@ -494,6 +478,138 @@ def saveData() -> None:
             logger.warning(f"Caught exception when writing current_mamid: {e}")
             logger.warning("Disabling current_mamid writing")
             env_write_current_mamid = False
+    prowlarr = os.getenv("UPDATE_PROWLARR")
+    if prowlarr:
+        update_prowlarr(state.last_update_mamid)
+
+
+def _normalize_url(url: str) -> str | None:
+    if not url.startswith(("http://", "https://")):
+        url = "http://" + url
+
+    parsed = urlparse(url)
+
+    if not parsed.hostname:
+        logger.error(f"Invalid URL: '{url}'")
+        return None
+
+    if parsed.port and not (1 <= parsed.port <= 65535):
+        logger.error("Invalid port in URL: '%s'", url)
+        return None
+
+    return urlunparse(parsed._replace(scheme=parsed.scheme.lower()))
+
+
+def update_prowlarr(new_mam_id: str) -> None:
+    prowlarr_api = os.getenv("PROWLARR_API")
+    prowlarr_url = os.getenv("PROWLARR_URL")
+    if not prowlarr_api:
+        logger.error("Cannot update Prowlarr. PROWLARR_API not set")
+        return
+    if not prowlarr_url:
+        logger.error("Cannot update Prowlarr. PROWLARR_URL not set")
+        return
+    prowlarr_url = _normalize_url(prowlarr_url)
+    if prowlarr_url is None:
+        return
+    prowlarr_indexer_url = f"{prowlarr_url}/api/v1/indexer?apikey={prowlarr_api}"
+    logger.debug(f"Prowlarr Indexer URL: {prowlarr_indexer_url}")
+    mam_config = _get_prowlarr_mam_config(prowlarr_indexer_url)
+    if mam_config is None:
+        return
+    mam_indexer_id = mam_config.get("id")
+    prowlarr_mam_url = f"{prowlarr_url}/api/v1/indexer/{mam_indexer_id}?apikey={prowlarr_api}"
+    logger.debug(f"Prowlarr MAM URL: {prowlarr_mam_url}")
+    mam_config = _update_prowlarr_mam_id(mam_config, new_mam_id)
+    if mam_config is None:
+        return
+    _write_updated_prowlarr_config(prowlarr_mam_url, mam_config)
+
+
+def _get_prowlarr_mam_config(url: str) -> None | MutableMapping[str, Any]:
+    try:
+        response = requests.get(url)
+    except requests.exceptions.ConnectionError:
+        logger.error("Cannot connect to Prowlarr to get indexers")
+        return None
+    except requests.exceptions.Timeout:
+        logger.error("Request timed out getting Prowlarr indexers")
+        return None
+    except requests.exceptions.RequestException as e:
+        logger.error(
+            "Unexpected error during HTTP GET for Prowlarr indexers: "
+            f"{e.__class__.__qualname__}: {e}"
+        )
+        return None
+    if response.status_code != 200:
+        logger.error(f"Prowlarr get indexers failed with status {response.status_code}")
+        return None
+    try:
+        indexers = response.json()
+    except ValueError:
+        logger.error("Prowlarr indexer response is not in JSON format")
+        return None
+    if not isinstance(indexers, list):
+        logger.error("Prowlarr indexer response is not a list")
+        return None
+    mam_indexer_id = None
+    mam_config = None
+    for indexer in indexers:
+        if not isinstance(indexer, MutableMapping):
+            continue
+        idx_name = indexer.get("definitionName")
+        idx_id = indexer.get("id")
+        if idx_name == "MyAnonamouse":
+            mam_indexer_id = idx_id
+            mam_config = indexer
+    if mam_config is None:
+        logger.error("Cannot find MAM Config in Prowlarr")
+        return None
+    logger.debug(f"MAM Config found at Prowlarr index: {mam_indexer_id}")
+    return mam_config
+
+
+def _update_prowlarr_mam_id(
+    mam_config: MutableMapping[str, Any], new_mam_id: str
+) -> None | MutableMapping[str, Any]:
+    fields = mam_config.get("fields", [])
+    mam_id_field = {}
+    mam_id_field_num = None
+    for index, field in enumerate(fields):
+        if field.get("name") == "mamId":
+            mam_id_field = field
+            mam_id_field_num = index
+    if mam_id_field_num is None:
+        logger.error("Cannot update Prowlarr. mam_id not found in Prowlarr config")
+        return None
+    old_mam_id = mam_id_field.get("value", "")
+    if new_mam_id == old_mam_id:
+        logger.debug("mam_id unchanged in Prowlarr")
+        return None
+    logger.debug("Changing mam_id in Prowlarr")
+    mam_config["fields"][mam_id_field_num]["value"] = new_mam_id
+    return mam_config
+
+
+def _write_updated_prowlarr_config(url: str, mam_config: MutableMapping[str, Any]) -> None:
+    headers = {"Content-type": "application/json"}
+    try:
+        response = requests.put(url, json=mam_config, headers=headers)
+    except requests.exceptions.ConnectionError:
+        logger.error("Cannot connect to Prowlarr to update config")
+        return
+    except requests.exceptions.Timeout:
+        logger.error("Request timed out updating Prowlarr config")
+        return
+    except requests.exceptions.RequestException as e:
+        logger.error(
+            f"Unexpected error during HTTP PUT for Prowlarr config: {e.__class__.__qualname__}: {e}"
+        )
+        return
+    if response.status_code != 202:
+        logger.error(f"Prowlarr PUT failed with status {response.status_code}")
+        return
+    logger.info("Prowlarr config updated with new mam_id")
 
 
 def signal_handler(signal_number: int, frame: FrameType | None) -> None:
@@ -607,9 +723,7 @@ def syncSessions() -> None:
     cached_mam_ids = set(sessions.keys())
     for session_mam_id, _session_obj in list(sessions.items()):
         if session_mam_id not in env_mam_ids:
-            logger.info(
-                f"mam_id exists in cache but not in env, deleting '{session_mam_id}'"
-            )
+            logger.info(f"mam_id exists in cache but not in env, deleting '{session_mam_id}'")
             del sessions[session_mam_id]
     for env_mam_id in env_mam_ids:
         if env_mam_id in cached_mam_ids:
@@ -646,8 +760,7 @@ try:
     syncSessions()
     if session_sets.invalids:
         logger.warning(
-            "Detected the following invalid mam_ids/sessions - "
-            "remove these from your env"
+            "Detected the following invalid mam_ids/sessions - remove these from your env"
         )
         for session in session_sets.invalids:
             logger.warning("INVALID SESSION:")
@@ -660,18 +773,15 @@ try:
                 if not session.ASN:
                     if state.first_run:
                         logger.warning(
-                            f"Could not grab ASN on initialization for "
-                            f"session: {session.mam_id}"
+                            f"Could not grab ASN on initialization for session: {session.mam_id}"
                         )
         state.first_run = False
         if not session_sets.valids:
             close_script(
-                "No available valid sessions - "
-                "wipe all of your env mam_ids and start fresh",
+                "No available valid sessions - wipe all of your env mam_ids and start fresh",
                 1,
                 "no valid sessions",
-                "All sessions listed in MAM_ID "
-                "environment variable are marked as invalid.",
+                "All sessions listed in MAM_ID environment variable are marked as invalid.",
             )
         if state.ratelimited and state.last_update_time:
             logger.info(
@@ -683,17 +793,13 @@ try:
             continue
         state.refresh()
         if state.ip == state.last_update_ip:
-            logger.debug(
-                "Current IP identical to last update sent to MAM, "
-                "sleeping for 5 minutes"
-            )
+            logger.debug("Current IP identical to last update sent to MAM, sleeping for 5 minutes")
             interruptable_sleep(300)
             continue
         if state.dumb_mode:
             if len(sessions) != 1:
                 close_script(
-                    "ERROR: entered dumb_mode with more than one session. "
-                    "Please report this error",
+                    "ERROR: entered dumb_mode with more than one session. Please report this error",
                     1,
                 )
             for session in sessions.values():
@@ -702,23 +808,20 @@ try:
             continue
         if not state.asn:
             logger.warning(
-                "Could not retrieve current ASN, "
-                "the ASN API may be invalid or ratelimited"
+                "Could not retrieve current ASN, the ASN API may be invalid or ratelimited"
             )
             logger.warning("Retrying in 5 minutes")
             interruptable_sleep(300)
             continue
         if state.ip and state.ip in session_sets.ips:
             logger.info(
-                "Current IP is associated with a mam_id. "
-                "Sending update with matching mam_id..."
+                "Current IP is associated with a mam_id. Sending update with matching mam_id..."
             )
             session_sets.ips[state.ip].send_session()
             continue
         if state.asn in session_sets.asns:
             logger.info(
-                "Current ASN is associated with a mam_id. "
-                "Sending update with matching mam_id..."
+                "Current ASN is associated with a mam_id. Sending update with matching mam_id..."
             )
             session_sets.asns[state.asn].send_session()
             continue
@@ -732,12 +835,9 @@ try:
                 "No sessions matching the current IP or ASN exist, will recheck "
                 "every 5 minutes in case the IP changes to a matching IP/ASN"
             )
+            logger.warning("This can occur if the script fails to fetch ASNs for your mam_ids")
             logger.warning(
-                "This can occur if the script fails to fetch ASNs for your mam_ids"
-            )
-            logger.warning(
-                "Consider making an additional session to "
-                f"match the current IP: '{state.ip}'"
+                f"Consider making an additional session to match the current IP: '{state.ip}'"
             )
         state.no_current_options = True
         interruptable_sleep(300)
