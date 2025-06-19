@@ -206,14 +206,13 @@ class Session:
             return
         if jsonResponse.status_code == 403:
             if json_response_msg == "No Session Cookie".casefold():
-                logger.critical("mam_id is not formatted correctly")
                 close_script("mam_id is not formatted correctly", 1)
             elif json_response_msg == "Invalid session - IP mismatch".casefold():
-                logger.critical(
+                close_script(
                     "Session invalidated due to IP mismatch"
-                    " - make sure ASN lock is enabled"
+                    " - make sure ASN lock is enabled",
+                    1,
                 )
-                close_script("Invalid session - IP locked", 1)
             elif json_response_msg == "Invalid session - ASN mismatch".casefold():
                 if not state.mismatched_asn:
                     logger.error("Could not update session IP due to ASN mismatch")
@@ -234,30 +233,25 @@ class Session:
                     state.mismatched_asn = True
                 logger.debug("Received repeat ASN mismatch response from MaM")
             elif json_response_msg == "Invalid session - Invalid Cookie".casefold():
-                logger.critical("Session invalid due to incorrectly formatted mam_id")
-                close_script("mam_id is not formatted correctly", 1)
+                close_script("Session invalid due to incorrectly formatted mam_id", 1)
             elif json_response_msg == "Incorrect session type - Other".casefold():
-                logger.critical("Session declared of incorrect type for unknown reason")
                 close_script("session declared of incorrect type for unknown reason", 1)
             elif (
                 json_response_msg
                 == "Incorrect session type - not allowed this function".casefold()
             ):
-                logger.critical("Session is not allowed to use dynamic seedbox API")
                 close_script("session is 'not allowed to use dynamic seedbox API'", 1)
             elif (
                 json_response_msg
                 == "Incorrect session type - non-API session".casefold()
             ):
-                logger.critical("Session does not have dynamic seedbox API enabled")
                 close_script("session does not have dynamic seedbox API enabled", 1)
             else:
-                logger.critical("Session was declared invalid for unknown reason")
                 if json_response_msg:
                     logger.critical(
                         f"Received unknown msg from MAM: '{json_response_msg}'"
                     )
-                close_script("session declared invalid for unknown reason", 1)
+                close_script("Session declared invalid for unknown reason", 1)
             return
         logger.error("Could not process MAM's response")
         return
@@ -455,14 +449,12 @@ def syncSessions() -> None:
 
 def mam_id_qualitycheck(mam_id: str | None) -> bool:
     if not mam_id:
-        logger.critical("MAM_ID environment variable is empty")
         close_script("MAM_ID environment variable is empty", 1)
     if "@" in mam_id or "," in mam_id:  # type: ignore
         logger.critical(
             "Detected invalid characters (@ or ,) from discontinued multisession format"
         )
-        logger.critical("Please set only one mam_id, without the @ip specifier")
-        close_script("Invalid characters used in MAM_ID", 1)
+        close_script("Please set only one mam_id, without the @ip specifier", 1)
     return True
 
 
