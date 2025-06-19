@@ -107,7 +107,6 @@ class StateSingleton:
             self.asn = latest_asn
 
     def mam_ip_updated(self, mamid: str, update_time: bool) -> None:
-        global state
         self.last_update_ip = self.ip
         self.last_update_mamid = mamid
         if update_time:
@@ -116,7 +115,7 @@ class StateSingleton:
             self.last_update_asn = self.asn
         else:
             self.last_update_asn = None
-        state.mismatched_asn = False
+        self.mismatched_asn = False
         saveData()
 
     @property
@@ -231,7 +230,7 @@ class Session:
                         " The session is not authorized to use the current ASN.",
                     )
                     state.mismatched_asn = True
-                logger.debug("Received repeat ASN mismatch response from MaM")
+                logger.debug("Received repeat ASN mismatch response from MAM")
             elif json_response_msg == "Invalid session - Invalid Cookie".casefold():
                 close_script("Session invalid due to incorrectly formatted mam_id", 1)
             elif json_response_msg == "Incorrect session type - Other".casefold():
@@ -277,7 +276,7 @@ def notify(notification_title: str, notification_body: str) -> None:
 
 def close_script(
     exit_message: str,
-    exit_code: float = 0,
+    exit_code: int = 0,
     notify_title: str | None = None,
     notify_body: str | None = None,
 ) -> None:
@@ -347,14 +346,20 @@ def saveData() -> None:
         "state": state.to_dict(),
         "sessions": {mam_id: session.to_dict() for mam_id, session in sessions.items()},
     }
-    with open(json_path, "w") as f:
-        json.dump(saveDict, f, indent=4, cls=TimeEnabledJSONEncoder)
+    try:
+        with open(json_path, "w") as f:
+            json.dump(saveDict, f, indent=4, cls=TimeEnabledJSONEncoder)
+    except (PermissionError, OSError) as e:
+        close_script(
+            f"Critical error writing session data: {e}",
+            1,
+        )
     if env_write_current_mamid and state.last_update_mamid:
         logger.debug("Writing current_mamid to file")
         try:
             with open(write_current_mamid_path, "w") as f:
                 f.write(state.last_update_mamid)
-        except Exception as e:
+        except (PermissionError, OSError) as e:
             logger.warning(f"Caught exception when writing current_mamid: {e}")
             logger.warning("Disabling current_mamid writing")
             env_write_current_mamid = False
@@ -393,7 +398,7 @@ def return_identity(
         json_response_asn: str = r.json().get("ASN", "")
         if return_current:
             logger.info(f"Current IP: {json_response_ip}")
-            logger.info(f"Current ASN: {json_response_ip}")
+            logger.info(f"Current ASN: {json_response_asn}")
         return json_response_ip, json_response_asn
     else:
         logger.error("External IP/ASN check failed for unknown reason")
