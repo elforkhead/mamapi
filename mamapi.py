@@ -163,7 +163,8 @@ class Session:
         global state
         try:
             json_response_msg = jsonResponse.json().get("msg", "").casefold()
-            logger.info(f"Received response: '{json_response_msg}'")
+            if not state.mismatched_asn:
+                logger.info(f"Received response: '{json_response_msg}'")
         except ValueError:
             logger.error("API response was not in JSON")
             logger.error(
@@ -409,7 +410,8 @@ def contactMAM(inputMAMID: str) -> requests.Response:
     while True:
         for attempt in range(3):
             try:
-                logger.info("Sending cookie to MAM...")
+                if not state.mismatched_asn:
+                    logger.info("Sending cookie to MAM...")
                 r = requests.get(
                     "https://t.myanonamouse.net/json/dynamicSeedbox.php",
                     cookies={"mam_id": inputMAMID},
